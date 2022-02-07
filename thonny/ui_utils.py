@@ -66,8 +66,6 @@ class CommonDialog(tk.Toplevel):
         if node is None:
             node = self
 
-        logger.info("consi %r", type(node))
-
         if isinstance(
             node,
             (
@@ -2012,9 +2010,6 @@ class _ZenityDialogProvider:
         filename = cls._call(args)
         if not filename:
             return None
-
-        if "defaultextension" in options and "." not in os.path.basename(filename):
-            filename += options["defaultextension"]
 
         return filename
 
