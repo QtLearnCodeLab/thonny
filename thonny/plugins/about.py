@@ -35,7 +35,7 @@ class AboutDialog(CommonDialog):
         heading_font = tkinter.font.nametofont("TkHeadingFont").copy()
         heading_font.configure(size=19, weight="bold")
         heading_label = ttk.Label(
-            main_frame, text="Thonny " + thonny.get_version(), font=heading_font
+            main_frame, text="Thonny " + thonny.get_version() + " QtPi", font=heading_font
         )
         heading_label.grid()
 

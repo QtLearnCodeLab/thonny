@@ -74,9 +74,10 @@ class ESP32Proxy(ESPProxy):
 
 
 class ESPConfigPage(BareMetalMicroPythonConfigPage):
-    def __init__(self, master, chip, firmware_start_address):
+    def __init__(self, master, chip, firmware_start_address, data_start_address):
         self._chip = chip
         self._firmware_start_address = firmware_start_address
+        self._data_start_address = data_start_address
         super().__init__(master)
 
     def _has_flashing_dialog(self):
@@ -94,7 +95,7 @@ class ESPConfigPage(BareMetalMicroPythonConfigPage):
             return
 
         dlg = ESPFlashingDialog(
-            self.winfo_toplevel(), self._chip, self._firmware_start_address, esptool_command
+            self.winfo_toplevel(), self._chip, self._firmware_start_address, self._data_start_address, esptool_command
         )
         ui_utils.show_dialog(dlg)
 
@@ -128,13 +129,14 @@ class ESP8266ConfigPage(ESPConfigPage):
 
 class ESP32ConfigPage(ESPConfigPage):
     def __init__(self, master):
-        super().__init__(master, "esp32", "0x1000")
+        super().__init__(master, "esp32", "0x1000", "0x610000")
 
 
 class ESPFlashingDialog(WorkDialog):
-    def __init__(self, master, chip, start_address, esptool_command):
+    def __init__(self, master, chip, start_address, data_address, esptool_command):
         self._chip = chip
         self._start_address = start_address
+        self._data_address = data_address
 
         super().__init__(master)
 
@@ -218,14 +220,31 @@ class ESPFlashingDialog(WorkDialog):
         self._flashmode_dout_radiobutton.grid(row=1, column=1, sticky="w")
 
         # Erase
-        self._erase_variable = tk.BooleanVar(value=True)
+        self._erase_variable = tk.BooleanVar(value=False)
         self._erase_checkbutton = ttk.Checkbutton(
             self.main_frame, text="Erase flash before installing", variable=self._erase_variable
         )
         self._erase_checkbutton.grid(
-            row=6, column=1, columnspan=2, sticky="w", padx=(epadx, 0), pady=(ipady, epady)
+            row=6, column=1,  sticky="w", padx=(epadx, 0), pady=(ipady, epady)
         )
+        # Data File 
+        self._data_variable = tk.BooleanVar(value=False)
+        self._data_checkbutton = ttk.Checkbutton(
+            self.main_frame, text="Flash Data File", variable=self._data_variable
+        )
+        self._data_checkbutton.grid(
+            row=6, column=2,  sticky="w", padx=(epadx, 0), pady=(ipady, epady)
+        )
+        # Firmware Data
+        data_label = ttk.Label(self.main_frame, text="Data File")
+        data_label.grid(row=7, column=1, sticky="w", padx=(epadx, 0), pady=(ipady, 0))
 
+        self._data_entry = ttk.Entry(self.main_frame, width=55)
+        self._data_entry.grid(row=7, column=2, sticky="nsew", padx=ipadx, pady=(ipady, 0))
+
+        data_browse_button = ttk.Button(self.main_frame, text="Browse...", command=self._data_browse)
+        data_browse_button.grid(row=7, column=3, sticky="we", padx=(0, epadx), pady=(ipady, 0))
+        
         self._reload_ports()
 
     def _reload_ports(self):
@@ -247,6 +266,19 @@ class ESPFlashingDialog(WorkDialog):
             self._firmware_entry.delete(0, "end")
             self._firmware_entry.insert(0, path)
 
+    def _data_browse(self):
+        initialdir = os.path.normpath(os.path.expanduser("~/Downloads"))
+        if not os.path.isdir(initialdir):
+            initialdir = None
+
+        path = ui_utils.askopenfilename(
+            filetypes=[("bin-files", ".bin"), ("all files", ".*")],
+            parent=self.winfo_toplevel(),
+            initialdir=initialdir,
+        )
+        if path:
+            self._data_entry.delete(0, "end")
+            self._data_entry.insert(0, path)
     def _check_connection(self, port):
         # wait a bit in case existing connection was just closed
         time.sleep(1.5)
@@ -278,6 +310,15 @@ class ESPFlashingDialog(WorkDialog):
 
         flash_mode = self._flashmode.get()
         erase_flash = self._erase_variable.get()
+        data_flash = self._data_variable.get()
+        data_path = None
+        if data_flash:
+            data_path = self._data_entry.get()
+            if not os.path.exists(data_path):
+                messagebox.showerror(
+                    "Bad firmware path", "Can't find firmware, please check path", master=self
+                )
+                return False
 
         proxy = get_runner().get_backend_proxy()
         port_was_used_in_thonny = (
@@ -290,10 +331,10 @@ class ESPFlashingDialog(WorkDialog):
         threading.Thread(
             target=self.work_in_thread,
             daemon=True,
-            args=[port, firmware_path, flash_mode, erase_flash, port_was_used_in_thonny],
+            args=[port, firmware_path, flash_mode, erase_flash,data_flash,data_path, port_was_used_in_thonny],
         ).start()
 
-    def work_in_thread(self, port, firmware_path, flash_mode, erase_flash, port_was_used_in_thonny):
+    def work_in_thread(self, port, firmware_path, flash_mode, erase_flash,data_flash,data_path, port_was_used_in_thonny):
         if port_was_used_in_thonny:
             time.sleep(1.5)
 
@@ -313,6 +354,18 @@ class ESPFlashingDialog(WorkDialog):
             "detect",
             self._start_address,
             firmware_path,
+        ]
+
+        write_data_command = self._esptool_command + [
+            "--port",
+            port,
+            "write_flash",
+            "--flash_mode",
+            flash_mode,
+            "--flash_size",  # default changed in esptool 3.0
+            "detect",
+            self._data_address,
+            data_path,
         ]
 
         if not self._check_connection(port):
@@ -356,6 +409,23 @@ class ESPFlashingDialog(WorkDialog):
         else:
             self.set_action_text("Done!")
             self.append_text("Done!")
+        if data_flash:
+            self.set_action_text("Writing Data File")
+            self.append_text(subprocess.list2cmdline(write_data_command) + "\n")
+            self._proc = self._create_subprocess(write_data_command)
+            while True:
+                line = self._proc.stdout.readline()
+                if not line:
+                    break
+                self.append_text(line)
+                self.set_action_text_smart(line)
+            returncode = self._proc.wait()
+            if returncode:
+                self.set_action_text("Error")
+                self.append_text("\nWrite command returned with error code %s" % returncode)
+            else:
+                self.set_action_text("Done!")
+                self.append_text("Done!")
         self.report_done(returncode == 0)
 
     def _create_subprocess(self, cmd) -> subprocess.Popen:
