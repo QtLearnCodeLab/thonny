@@ -156,7 +156,11 @@ class ESPFlashingDialog(WorkDialog):
         )
 
     def is_ready_for_work(self):
-        return self._port_desc_variable.get() and self._firmware_entry.get()
+        return (
+            ( self._port_desc_variable.get() and self._firmware_entry.get() )
+            # or 
+            # ( self._port_desc_variable.get() and self._data_entry.get() )
+        )
 
     def get_action_text_max_length(self):
         return 35
@@ -218,25 +222,29 @@ class ESPFlashingDialog(WorkDialog):
             flashmode_group, text="Dual Output (dout)", variable=self._flashmode, value="dout"
         )
         self._flashmode_dout_radiobutton.grid(row=1, column=1, sticky="w")
-
+        s = ttk.Style()                                                                 
+        s.configure('Red.TCheckbutton',  foreground="red")        
         # Erase
         self._erase_variable = tk.BooleanVar(value=False)
         self._erase_checkbutton = ttk.Checkbutton(
-            self.main_frame, text="Erase flash before installing", variable=self._erase_variable
+            self.main_frame, text="Erase Complete Flash", variable=self._erase_variable,
+            style = 'Red.TCheckbutton'
         )
         self._erase_checkbutton.grid(
             row=6, column=1,  sticky="w", padx=(epadx, 0), pady=(ipady, epady)
         )
         # Data File 
+        
         self._data_variable = tk.BooleanVar(value=False)
         self._data_checkbutton = ttk.Checkbutton(
-            self.main_frame, text="Flash Data File", variable=self._data_variable
+            self.main_frame, text="Flash Data (Erase and Data Flashing required only once)", variable=self._data_variable,
+            style = 'Red.TCheckbutton'
         )
         self._data_checkbutton.grid(
             row=6, column=2,  sticky="w", padx=(epadx, 0), pady=(ipady, epady)
         )
         # Firmware Data
-        data_label = ttk.Label(self.main_frame, text="Data File")
+        data_label = ttk.Label(self.main_frame, text="QtPi Data File")
         data_label.grid(row=7, column=1, sticky="w", padx=(epadx, 0), pady=(ipady, 0))
 
         self._data_entry = ttk.Entry(self.main_frame, width=55)
@@ -316,7 +324,7 @@ class ESPFlashingDialog(WorkDialog):
             data_path = self._data_entry.get()
             if not os.path.exists(data_path):
                 messagebox.showerror(
-                    "Bad firmware path", "Can't find firmware, please check path", master=self
+                    "Bad Data File path", "Can't find Data File, please check path", master=self
                 )
                 return False
 
