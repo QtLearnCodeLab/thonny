@@ -4,14 +4,16 @@ import io
 import os
 import re
 import sys
+import time
 import tkinter as tk
+from logging import getLogger
 from tkinter import messagebox
 from typing import Dict, Union  # @UnusedImport
 
 from thonny import get_workbench, roughparse, tktextext, ui_utils
 from thonny.common import TextRange
 from thonny.tktextext import EnhancedText
-from thonny.ui_utils import EnhancedTextWithLogging, scrollbar_style, ask_string
+from thonny.ui_utils import EnhancedTextWithLogging, ask_string, scrollbar_style
 
 _syntax_options = {}  # type: Dict[str, Union[str, int]]
 # BREAKPOINT_SYMBOL = "•" # Bullet
@@ -27,6 +29,8 @@ NON_TEXT_CHARS.remove("\t")
 NON_TEXT_CHARS.remove("\n")
 NON_TEXT_CHARS.remove("\r")
 NON_TEXT_CHARS.remove("\f")
+
+logger = getLogger(__name__)
 
 
 class SyntaxText(EnhancedText):
@@ -114,7 +118,6 @@ class CodeViewText(EnhancedTextWithLogging, SyntaxText):
     """Provides opportunities for monkey-patching by plugins"""
 
     def __init__(self, master=None, cnf={}, **kw):
-
         super().__init__(
             master=master,
             tag_current_line=get_workbench().get_option("view.highlight_current_line"),
@@ -165,7 +168,10 @@ class CodeView(tktextext.EnhancedTextFrame):
         get_workbench().bind("SyntaxThemeChanged", self._reload_theme_options, True)
         self._original_newlines = os.linesep
         self._reload_theme_options()
-        self._gutter.bind("<Double-Button-1>", self._toggle_breakpoint, True)
+        self._start_toggle_breakpoint_index = None
+        self._last_toggle_breakpoint_time = 0
+        self._gutter.bind("<Button-1>", self._start_toggle_breakpoint, True)
+        self._gutter.bind("<ButtonRelease-1>", self._consider_toggle_breakpoint, True)
         # self.text.tag_configure("breakpoint_line", background="pink")
         self._gutter.tag_configure("breakpoint", foreground="crimson")
 
@@ -226,8 +232,8 @@ class CodeView(tktextext.EnhancedTextFrame):
         return content.encode(self.detect_encoding(content.encode("ascii", errors="replace")))
 
     def set_content_as_bytes(self, data, keep_undo=False):
-
         encoding = self.detect_encoding(data)
+        logger.debug("Detected encoding %s", encoding)
         while True:
             try:
                 chars = data.decode(encoding)
@@ -270,8 +276,19 @@ class CodeView(tktextext.EnhancedTextFrame):
         if not keep_undo:
             self.text.edit_reset()
 
-    def _toggle_breakpoint(self, event):
+    def _start_toggle_breakpoint(self, event):
+        self._start_toggle_breakpoint_index = "@%d,%d" % (event.x, event.y)
+
+    def _consider_toggle_breakpoint(self, event):
+        if time.time() - self._last_toggle_breakpoint_time < 0.3:
+            # it was probably a double-click. Don't want to double-toggle in this case.
+            return
+
         index = "@%d,%d" % (event.x, event.y)
+        if index != self._start_toggle_breakpoint_index:
+            # it was probably a drag
+            return
+
         start_index = index + " linestart"
         end_index = index + " lineend"
 
@@ -283,6 +300,7 @@ class CodeView(tktextext.EnhancedTextFrame):
                 self.text.tag_add("breakpoint_line", start_index, end_index)
 
         self.update_gutter(clean=True)
+        self._last_toggle_breakpoint_time = time.time()
 
     def _clean_selection(self):
         self.text.tag_remove("sel", "1.0", "end")

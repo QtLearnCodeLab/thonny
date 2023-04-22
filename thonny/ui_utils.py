@@ -1,5 +1,4 @@
 # -*- coding: utf-8 -*-
-from logging import getLogger
 import os
 import platform
 import re
@@ -11,8 +10,9 @@ import time
 import tkinter as tk
 import tkinter.font
 import traceback
+from logging import getLogger
 from tkinter import filedialog, messagebox, ttk
-from typing import Callable, List, Optional, Tuple, Union  # @UnusedImport
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union  # @UnusedImport
 
 from _tkinter import TclError
 
@@ -33,19 +33,22 @@ logger = getLogger(__name__)
 
 
 class CommonDialog(tk.Toplevel):
-    def __init__(self, master=None):
+    def __init__(self, master=None, skip_tk_dialog_attributes=False, **kw):
         assert master
-        super().__init__(master=master)
+        super().__init__(master=master, class_="Thonny", **kw)
         self.withdraw()  # remain invisible until size calculations are done
 
         # TODO: Is it still required ?
         # self.bind("<FocusIn>", self._unlock_on_focus_in, True)
 
-        # https://bugs.python.org/issue43655
-        if self._windowingsystem == "aqua":
-            self.tk.call("::tk::unsupported::MacWindowStyle", "style", self, "moveableModal", "")
-        elif self._windowingsystem == "x11":
-            self.wm_attributes("-type", "dialog")
+        if not skip_tk_dialog_attributes:
+            # https://bugs.python.org/issue43655
+            if self._windowingsystem == "aqua":
+                self.tk.call(
+                    "::tk::unsupported::MacWindowStyle", "style", self, "moveableModal", ""
+                )
+            elif self._windowingsystem == "x11":
+                self.wm_attributes("-type", "dialog")
 
         self.parent = master
 
@@ -56,11 +59,14 @@ class CommonDialog(tk.Toplevel):
             if focussed_widget:
                 focussed_widget.focus_set()
 
-    def get_padding(self):
-        return ems_to_pixels(2)
+    def get_large_padding(self):
+        return ems_to_pixels(1.5)
 
-    def get_internal_padding(self):
-        return self.get_padding() // 4
+    def get_medium_padding(self):
+        return ems_to_pixels(1)
+
+    def get_small_padding(self):
+        return ems_to_pixels(0.6)
 
     def set_initial_focus(self, node=None) -> bool:
         if node is None:
@@ -90,14 +96,20 @@ class CommonDialog(tk.Toplevel):
 
 
 class CommonDialogEx(CommonDialog):
-    def __init__(self, master=None, cnf={}, **kw):
-        super().__init__(master=master, cnf=cnf, **kw)
+    def __init__(self, master=None, **kw):
+        super().__init__(master=master, **kw)
+
+        self.rowconfigure(0, weight=1)
+        self.columnconfigure(0, weight=1)
 
         # Need to fill the dialog with a frame to gain theme support
         self.main_frame = ttk.Frame(self)
-        self.main_frame.grid(row=0, column=0, sticky="nsew")
-        self.columnconfigure(0, weight=1)
-        self.rowconfigure(0, weight=1)
+
+        # ipady doesn't work right, at least on Linux (it only applies to the first gridded child)
+        # therefore only providing common padding for left and right edges
+        self.main_frame.grid(row=0, column=0, sticky="nsew", ipadx=self.get_large_padding())
+        self.main_frame.rowconfigure(0, weight=1)
+        self.main_frame.columnconfigure(0, weight=1)
 
         self.bind("<Escape>", self.on_close, True)
         self.protocol("WM_DELETE_WINDOW", self.on_close)
@@ -120,7 +132,7 @@ class QueryDialog(CommonDialogEx):
         self.var = tk.StringVar(value=initial_value)
         self.result = None
 
-        margin = self.get_padding()
+        margin = self.get_large_padding()
         spacing = margin // 2
 
         self.title(title)
@@ -526,7 +538,7 @@ class ClosableNotebook(ttk.Notebook):
         self.close_tab(self._popup_index)
 
     def _close_other_tabs(self):
-        self.close_tabs(self._popup_index)
+        self.close_tabs(except_index=self._popup_index)
 
     def close_tabs(self, except_index=None):
         for tab_index in reversed(range(len(self.winfo_children()))):
@@ -970,15 +982,39 @@ class AutoScrollbar(SafeScrollbar):
     # works if you use the grid geometry manager.
 
     def __init__(self, master=None, **kw):
+        self.hide_count = 0
+        self.gridded = False
         super().__init__(master=master, **kw)
 
     def set(self, first, last):
         if float(first) <= 0.0 and float(last) >= 1.0:
-            self.grid_remove()
-        elif float(first) > 0.001 or float(last) < 0.009:
+            # Need to accept 1 automatic hide, otherwise even narrow files
+            # get horizontal scrollbar
+            if self.gridded and self.hide_count < 2:
+                self.grid_remove()
+        elif float(first) > 0.001 or float(last) < 0.999:
             # with >0 and <1 it occasionally made scrollbar wobble back and forth
-            self.grid()
+            if not self.gridded:
+                self.grid()
         ttk.Scrollbar.set(self, first, last)
+
+    def grid(self, *args, **kwargs):
+        super().grid(*args, **kwargs)
+        self.gridded = True
+
+    def grid_configure(self, *args, **kwargs):
+        super().grid_configure(*args, **kwargs)
+        self.gridded = True
+
+    def grid_remove(self):
+        super().grid_remove()
+        self.gridded = False
+        self.hide_count += 1
+
+    def grid_forget(self):
+        super().grid_forget()
+        self.gridded = False
+        self.hide_count += 1
 
     def pack(self, **kw):
         raise tk.TclError("cannot use pack with this widget")
@@ -1283,7 +1319,6 @@ class NoteBox(CommonDialog):
         self._current_chars += chars
 
     def place(self, target, focus=None):
-
         # Compute the area that will be described by this Note
         focus_x = target.winfo_rootx()
         focus_y = target.winfo_rooty()
@@ -1342,7 +1377,6 @@ class NoteBox(CommonDialog):
         self.deiconify()
 
     def show_note(self, *content_items: Union[str, List], target=None, focus=None) -> None:
-
         self.set_content(*content_items)
         self.place(target, focus)
 
@@ -1580,33 +1614,47 @@ def remove_line_numbers(s):
 
 # Place a toplevel window at the center of parent or screen
 # It is a Python implementation of ::tk::PlaceWindow.
-# Copied from tkinter.simpledialog of Python 3.10.2
-def _place_window(w, parent=None):
+# Copied and adapted from tkinter.simpledialog of Python 3.10.2
+def _place_window(w, parent=None, width=None, height=None):
     w.wm_withdraw()  # Remain invisible while we figure out the geometry
     w.update_idletasks()  # Actualize geometry information
 
-    minwidth = w.winfo_reqwidth()
-    minheight = w.winfo_reqheight()
+    minwidth = width or w.winfo_reqwidth()
+    minheight = height or w.winfo_reqheight()
     maxwidth = w.winfo_vrootwidth()
     maxheight = w.winfo_vrootheight()
     if parent is not None and parent.winfo_ismapped():
+        logger.info(
+            f"Parent y: {parent.winfo_y()}, rooty: {parent.winfo_rooty()}, vrooty: {parent.winfo_vrooty()}"
+        )
         x = parent.winfo_rootx() + (parent.winfo_width() - minwidth) // 2
-        y = parent.winfo_rooty() + (parent.winfo_height() - minheight) // 2
+        y = parent.winfo_y() + (parent.winfo_height() - minheight) // 2
         vrootx = w.winfo_vrootx()
         vrooty = w.winfo_vrooty()
         x = min(x, vrootx + maxwidth - minwidth)
         x = max(x, vrootx)
         y = min(y, vrooty + maxheight - minheight)
-        y = max(y, vrooty)
+        # don't allow the dialog go higher than parent. This way the title bar remains visible.
+        y = max(y, vrooty, parent.winfo_y())
         if w._windowingsystem == "aqua":
             # Avoid the native menu bar which sits on top of everything.
-            y = max(y, 22)
+            y = max(y, ems_to_pixels(2))
+
+        if y + minheight > maxheight:
+            logger.debug("Aligning top with parent (%s vs %s)", y + minheight, maxheight)
+            y = parent.winfo_y()
     else:
         x = (w.winfo_screenwidth() - minwidth) // 2
         y = (w.winfo_screenheight() - minheight) // 2
 
     w.wm_maxsize(maxwidth, maxheight)
-    w.wm_geometry("+%d+%d" % (x, y))
+    if width and height:
+        geometry = "%dx%d+%d+%d" % (width, height, x, y)
+    else:
+        geometry = "+%d+%d" % (x, y)
+
+    logger.info(f"Placing {w} with geometry {geometry}")
+    w.wm_geometry(geometry)
     w.wm_deiconify()  # Become visible at the desired location
 
 
@@ -1745,6 +1793,7 @@ class ChoiceDialog(CommonDialogEx):
         choices=[],
         initial_choice_index=None,
     ) -> None:
+        self.result = None
         super().__init__(master=master)
 
         self.title(title)
@@ -1928,28 +1977,60 @@ def _get_dialog_provider():
     return filedialog
 
 
+def try_restore_focus_after_file_dialog(dialog_parent):
+    if dialog_parent is None:
+        return
+
+    logger.info("Restoring focus to %s", dialog_parent)
+    old_focused_widget = dialog_parent.winfo_toplevel().focus_get()
+
+    dialog_parent.winfo_toplevel().lift()
+    dialog_parent.winfo_toplevel().focus_force()
+    dialog_parent.winfo_toplevel().grab_set()
+    if running_on_mac_os():
+        dialog_parent.winfo_toplevel().grab_release()
+
+    if old_focused_widget is not None:
+        try:
+            old_focused_widget.focus_force()
+        except TclError:
+            logger.warning("Could not restore focus to %r", old_focused_widget)
+
+
 def asksaveasfilename(**options):
     # https://tcl.tk/man/tcl8.6/TkCmd/getOpenFile.htm
-    _check_dialog_parent(options)
-    return _get_dialog_provider().asksaveasfilename(**options)
+    parent = _check_dialog_parent(options)
+    try:
+        return _get_dialog_provider().asksaveasfilename(**options)
+    finally:
+        try_restore_focus_after_file_dialog(parent)
 
 
 def askopenfilename(**options):
     # https://tcl.tk/man/tcl8.6/TkCmd/getOpenFile.htm
-    _check_dialog_parent(options)
-    return _get_dialog_provider().askopenfilename(**options)
+    parent = _check_dialog_parent(options)
+    try:
+        return _get_dialog_provider().askopenfilename(**options)
+    finally:
+        try_restore_focus_after_file_dialog(parent)
 
 
 def askopenfilenames(**options):
     # https://tcl.tk/man/tcl8.6/TkCmd/getOpenFile.htm
-    _check_dialog_parent(options)
-    return _get_dialog_provider().askopenfilenames(**options)
+    parent = _check_dialog_parent(options)
+    try:
+        return _get_dialog_provider().askopenfilenames(**options)
+    finally:
+        try_restore_focus_after_file_dialog(parent)
 
 
 def askdirectory(**options):
     # https://tcl.tk/man/tcl8.6/TkCmd/chooseDirectory.htm
-    _check_dialog_parent(options)
-    return _get_dialog_provider().askdirectory(**options)
+    parent = _check_dialog_parent(options)
+    try:
+        return _get_dialog_provider().askdirectory(**options)
+    finally:
+        try_restore_focus_after_file_dialog(parent)
 
 
 def _check_dialog_parent(options):
@@ -1981,6 +2062,8 @@ def _check_dialog_parent(options):
         # TODO: Consider removing this when upgrading from Tk 8.6.8
         del options["master"]
         del options["parent"]
+
+    return parent
 
 
 class _ZenityDialogProvider:
@@ -2056,9 +2139,9 @@ class _ZenityDialogProvider:
         if result.returncode == 0:
             return result.stdout.strip()
         else:
-            # TODO: log problems
-            print(result.stderr, file=sys.stderr)
-            # could check stderr, but it may contain irrelevant warnings
+            logger.warning(
+                "Zenity returned code %r and stderr %r", result.returncode, result.stderr
+            )
             return None
 
 
@@ -2111,7 +2194,7 @@ def handle_mistreated_latin_shortcuts(registry, event):
                     handler()
 
 
-def show_dialog(dlg, master=None, geometry=None):
+def show_dialog(dlg, master=None, width=None, height=None, modal=True):
     if getattr(dlg, "closed", False):
         return
 
@@ -2126,33 +2209,26 @@ def show_dialog(dlg, master=None, geometry=None):
     if master.winfo_toplevel().winfo_viewable():
         dlg.transient(master.winfo_toplevel())
 
-    if isinstance(geometry, str):
-        dlg.geometry(geometry)
-        dlg.wm_deiconify()
-    else:
-        saved_size = get_workbench().get_option(get_size_option_name(dlg))
-        if saved_size:
-            width = min(max(saved_size[0], ems_to_pixels(10)), ems_to_pixels(1000))
-            height = min(max(saved_size[0], ems_to_pixels(8)), ems_to_pixels(800))
-            left = master.winfo_rootx() + master.winfo_width() // 2 - width // 2
-            top = master.winfo_rooty() + master.winfo_height() // 2 - height // 2
-            dlg.geometry("%dx%d+%d+%d" % (width, height, left, top))
-            dlg.wm_deiconify()
-        else:
-            _place_window(dlg, master)
+    saved_size = get_workbench().get_option(get_size_option_name(dlg))
+    if saved_size:
+        width = min(max(saved_size[0], ems_to_pixels(10)), ems_to_pixels(500))
+        height = min(max(saved_size[1], ems_to_pixels(8)), ems_to_pixels(300))
+
+    _place_window(dlg, master, width=width, height=height)
 
     dlg.lift()
+    dlg.wait_visibility()
 
+    if modal:
+        try:
+            dlg.grab_set()
+        except TclError as e:
+            logger.warning("Can't grab: %s", e)
+
+    dlg.update_idletasks()
+    dlg.focus_set()
     if hasattr(dlg, "set_initial_focus"):
         dlg.set_initial_focus()
-    else:
-        dlg.focus_set()
-
-    dlg.wait_visibility()
-    try:
-        dlg.grab_set()
-    except TclError as e:
-        logger.warning("Can't grab: %s", e)
 
     dlg.wait_window(dlg)
     dlg.grab_release()
@@ -2294,10 +2370,10 @@ class TextMenu(MenuEx):
         return False
 
 
-def create_url_label(master, url, text=None):
+def create_url_label(master, url, text=None, **kw):
     import webbrowser
 
-    return create_action_label(master, text or url, lambda _: webbrowser.open(url))
+    return create_action_label(master, text or url, lambda _: webbrowser.open(url), **kw)
 
 
 def create_action_label(master, text, click_handler, **kw):
@@ -2324,7 +2400,7 @@ def get_default_basic_theme():
 EM_WIDTH = None
 
 
-def ems_to_pixels(x: int) -> int:
+def ems_to_pixels(x: float) -> int:
     global EM_WIDTH
     if EM_WIDTH is None:
         EM_WIDTH = tkinter.font.nametofont("TkDefaultFont").measure("m")
@@ -2375,6 +2451,14 @@ def add_messagebox_parent_checker():
         setattr(messagebox, name, wrap_with_parent_checker(fun))
 
 
+def replace_unsupported_chars(text: str) -> str:
+    if get_tk_version_info() < (8, 6, 12):
+        # can crash with emojis
+        return "".join(c if c < "\U00010000" else "□" for c in text)
+    else:
+        return text
+
+
 def windows_known_extensions_are_hidden() -> bool:
     assert running_on_windows()
     import winreg
@@ -2389,6 +2473,81 @@ def windows_known_extensions_are_hidden() -> bool:
         return winreg.QueryValueEx(reg_key, "HideFileExt")[0] == 1
     finally:
         reg_key.Close()
+
+
+class MappingCombobox(ttk.Combobox):
+    def __init__(self, master, mapping=None, **kw):
+        super().__init__(master, **kw)
+
+        if mapping is None:
+            mapping = {}
+
+        self.mapping: Dict[str, Any]
+        self.set_mapping(mapping)
+        self.mapping_desc_variable = tk.StringVar(value="")
+        self.configure(textvariable=self.mapping_desc_variable)
+
+        if kw.get("state", None) == "disabled":
+            self.state(["readonly"])
+        else:
+            self.state(["!disabled", "readonly"])
+
+    def set_mapping(self, mapping: Dict[str, Any]):
+        self.mapping = mapping
+        self["values"] = list(mapping)
+
+    def get_selected_value(self) -> Any:
+        desc = self.mapping_desc_variable.get()
+        return self.mapping.get(desc, None)
+
+    def select_value(self, value) -> None:
+        for desc in self.mapping:
+            if self.mapping[desc] == value:
+                self.set(desc)
+
+    def select_none(self) -> None:
+        self.mapping_desc_variable.set("")
+
+
+class AdvancedLabel(ttk.Label):
+    def __init__(self, master, **kw):
+        self._default_font = tkinter.font.nametofont("TkDefaultFont")
+        self._url_font = self._default_font.copy()
+        self._url_font.configure(underline=1)
+        self._url = None
+        super().__init__(master, **kw)
+        self.bind("<Button-1>", self._on_click, True)
+
+    def set_url(self, url: Optional[str]) -> None:
+        if self._url == url:
+            return
+
+        self._url = url
+        if url:
+            self.configure(style="Url.TLabel", cursor=get_hyperlink_cursor(), font=self._url_font)
+        else:
+            self.configure(style="TLabel", cursor="", font=self._default_font)
+
+    def get_url(self) -> Optional[str]:
+        return self._url
+
+    def _on_click(self, *event):
+        if self._url:
+            if os.path.isdir(self._url):
+                open_with_default_app(self._url)
+            else:
+                import webbrowser
+
+                webbrowser.open(self._url)
+
+
+def open_with_default_app(path):
+    if running_on_windows():
+        os.startfile(path)
+    elif running_on_mac_os():
+        subprocess.run(["open", path])
+    else:
+        subprocess.run(["xdg-open", path])
 
 
 if __name__ == "__main__":

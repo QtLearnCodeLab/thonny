@@ -1,5 +1,5 @@
-from logging import getLogger
 import os
+from logging import getLogger
 
 from thonny import get_runner
 from thonny.assistance import ProgramAnalyzer, add_program_analyzer
@@ -239,7 +239,6 @@ class ProgramNamingAnalyzer(ProgramAnalyzer):
         for item in os.listdir(main_file_dir):
             full_path = os.path.join(main_file_dir, item)
             if item.endswith(".py") and item[:-3] in library_modules:
-
                 if is_same_path(full_path, main_file_path):
                     prelude = "Your program file is named '%s'." % item
                     rename_hint = " (*File → Rename…* )"
@@ -267,9 +266,9 @@ class ProgramNamingAnalyzer(ProgramAnalyzer):
 
     def _get_3rd_party_modules(self):
         proxy = get_runner().get_backend_proxy()
-        from thonny.plugins.cpython_frontend import CPythonProxy
+        from thonny.plugins.cpython_frontend import LocalCPythonProxy
 
-        if not isinstance(proxy, CPythonProxy):
+        if not isinstance(proxy, LocalCPythonProxy):
             return []
 
         try:

@@ -1,7 +1,6 @@
 import gettext
-from logging import getLogger
 import os
-
+from logging import getLogger
 
 logger = getLogger(__name__)
 
@@ -28,10 +27,12 @@ LANGUAGES_DICT = {
     "pt_BR": "Português (BR)",
     "ro_RO": "Român",
     "ru_RU": "Русский",
+    "sl_SI": "Slovenščina",
     "sk_SK": "Slovenčina [BETA]",
     "fi_FI": "Suomi [BETA]",
     "sv_SE": "Svenska [BETA]",
     "sq_AL": "Shqip [ALPHA]",
+    "vi_VN": "Tiếng Việt [BETA]",
     "tr_TR": "Türkçe [BETA]",
     "uk_UA": "Українська",
     "zh_TW": "繁體中文-TW",
@@ -42,6 +43,8 @@ LANGUAGES_DICT = {
     "el_GR": "Ελληνικά",
     "ko_KR": "한국어 [韓國語] [ALPHA]",
     "ar_AR": "[BETA] عربي",
+    "ta_IN": "தமிழ் [BETA]",
+    "th_TH": "ภาษาไทย [BETA]",
 }
 
 # how many spaces to add to button caption in order to make whole text visible

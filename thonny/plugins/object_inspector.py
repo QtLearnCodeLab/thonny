@@ -1,8 +1,8 @@
 import ast
 import logging
-from logging import getLogger
 import tkinter as tk
-from tkinter import ttk, messagebox
+from logging import getLogger
+from tkinter import messagebox, ttk
 
 import thonny.memory
 from thonny import get_runner, get_workbench, ui_utils
@@ -137,6 +137,7 @@ class ObjectInspector(ttk.Frame):
             [
                 FileHandleInspector(self.content_page),
                 FunctionInspector(self.content_page),
+                MicrobitImageInspector(self.content_page),
                 StringInspector(self.content_page),
                 ElementsInspector(self.content_page),
                 DictInspector(self.content_page),
@@ -326,7 +327,6 @@ class FileHandleInspector(TextFrame, ContentInspector):
         return "file_content" in object_info or "file_error" in object_info
 
     def set_object_info(self, object_info):
-
         if "file_content" not in object_info:
             logger.exception("File error: " + object_info["file_error"])
             return
@@ -415,6 +415,20 @@ class StringInspector(TextFrame, ContentInspector):
                            line_count_term,
                            "line" if line_count_term == 1 else "lines"))
         """
+
+
+class MicrobitImageInspector(TextFrame, ContentInspector):
+    def __init__(self, master):
+        ContentInspector.__init__(self, master)
+        TextFrame.__init__(self, master, read_only=True)
+
+    def applies_to(self, object_info):
+        return "microbit_image" in object_info
+
+    def set_object_info(self, object_info):
+        content = object_info["microbit_image"]
+        # self.text.configure(height=min(line_count_sep, 10))
+        self.text.set_content(content)
 
 
 class IntInspector(TextFrame, ContentInspector):

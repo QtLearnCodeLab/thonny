@@ -45,8 +45,11 @@ def running_on_linux() -> bool:
 
 
 def running_on_rpi() -> bool:
+    machine_lower = platform.uname().machine.lower()
     return running_on_linux() and (
-        platform.uname().machine.lower().startswith("arm")
+        # not great heuristics, I know
+        machine_lower.startswith("arm")
+        or machine_lower.startswith("aarch64")
         or os.environ.get("DESKTOP_SESSION") == "LXDE-pi"
     )
 
@@ -92,8 +95,23 @@ def list_volumes(skip_letters=set()) -> Sequence[str]:
             return volumes
         finally:
             ctypes.windll.kernel32.SetErrorMode(old_mode)  # @UndefinedVariable
+    if sys.platform == "linux":
+        from dbus_next.errors import DBusError
+
+        from thonny.udisks import list_volumes_sync
+
+        mount_points = []
+        try:
+            mount_points = list_volumes_sync()
+        except DBusError as error:
+            # Fallback to using the 'mount' command on Linux if the Udisks D-Bus service is unavailable.
+            if "org.freedesktop.DBus.Error.ServiceUnknown" not in error.text:
+                raise
+            mount_output = subprocess.check_output("mount").splitlines()
+            mount_points = [x.split()[2].decode("utf-8") for x in mount_output]
+        return mount_points
     else:
-        # 'posix' means we're on Linux or OSX (Mac).
+        # 'posix' means we're on *BSD or OSX (Mac).
         # Call the unix "mount" command to list the mounted volumes.
         mount_output = subprocess.check_output("mount").splitlines()
         return [x.split()[2].decode("utf-8") for x in mount_output]
@@ -402,20 +420,6 @@ def lap_time(text=""):
     _timer_time = time.time()
 
 
-class TimeHelper:
-    def __init__(self, time_allowed):
-        self.start_time = time.time()
-        self.time_allowed = time_allowed
-
-    @property
-    def time_spent(self):
-        return time.time() - self.start_time
-
-    @property
-    def time_left(self):
-        return max(self.time_allowed - self.time_spent, 0)
-
-
 def copy_to_clipboard(data):
     if running_on_windows():
         _copy_to_windows_clipboard(data)
@@ -519,8 +523,9 @@ def inside_flatpak():
 
 def show_command_not_available_in_flatpak_message():
     from tkinter import messagebox
-    from thonny.languages import tr
+
     from thonny import get_workbench
+    from thonny.languages import tr
 
     messagebox.showinfo(
         tr("Command not available"),

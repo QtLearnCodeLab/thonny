@@ -1,10 +1,10 @@
-from logging import getLogger
 import tkinter as tk
 import traceback
-from typing import Optional, Tuple, List
+from logging import getLogger
+from typing import List, Optional, Tuple
 
 from thonny import get_workbench
-from thonny.codeview import SyntaxText, CodeViewText, get_syntax_options_for_tag
+from thonny.codeview import CodeViewText, SyntaxText, get_syntax_options_for_tag
 from thonny.common import SignatureInfo, SignatureParameter
 from thonny.editors import Editor
 from thonny.misc_utils import running_on_mac_os
@@ -143,7 +143,9 @@ class EditorInfoBox(tk.Toplevel):
 
     def _show_on_screen(self, x: int, y: int) -> None:
         global a_box_is_appearing
-        assert not a_box_is_appearing
+        if a_box_is_appearing:
+            logger.debug("Box already appearing, skipping _show_on_screen")
+            return
 
         try:
             a_box_is_appearing = True
@@ -277,7 +279,6 @@ class DocuBoxBase(EditorInfoBox):
             self._append_chars(sig.return_type, ["annotation"])
 
     def render_parameter(self, param: SignatureParameter, active: bool) -> None:
-
         if active:
             base_tags = ["active"]
         else:

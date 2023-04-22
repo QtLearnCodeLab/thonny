@@ -3,11 +3,11 @@
 """
 Adds debugging commands and features.
 """
-
 import ast
-from logging import getLogger
 import os.path
 import tkinter as tk
+import tokenize
+from logging import getLogger
 from tkinter import ttk
 from tkinter.messagebox import showinfo
 from typing import List, Union  # @UnusedImport
@@ -30,9 +30,7 @@ from thonny.languages import tr
 from thonny.memory import VariablesFrame
 from thonny.misc_utils import running_on_mac_os, running_on_rpi, shorten_repr
 from thonny.tktextext import TextFrame
-from thonny.ui_utils import CommonDialog, select_sequence, get_hyperlink_cursor
-from thonny.ui_utils import select_sequence, CommonDialog, get_tk_version_info
-from _tkinter import TclError
+from thonny.ui_utils import CommonDialog, get_hyperlink_cursor, get_tk_version_info, select_sequence
 
 logger = getLogger(__name__)
 
@@ -356,9 +354,13 @@ class FrameVisualizer:
         self._frame_id = frame_info.id
         self._filename = frame_info.filename
         self._firstlineno = None
-        if running_on_mac_os():
+        if running_on_mac_os() and get_tk_version_info() < (8, 6, 11):
+            # Older Tk versions had glitch with placement of the expression box
+            # (closed box was not cleaned up)
             self._expression_box = ToplevelExpressionBox(text_frame)
         else:
+            # since 8.6.11 Tk on macOS has glitch with ToplevelExpressionBox
+            # (bad z-index)
             self._expression_box = PlacedExpressionBox(text_frame)
 
         self._note_box = ui_utils.NoteBox(text_frame.winfo_toplevel())
@@ -643,13 +645,12 @@ class BaseExpressionBox:
         event = frame_info.event
 
         if frame_info.current_root_expression is not None:
-
             if self._last_root_expression != frame_info.current_root_expression:
                 # can happen, eg. when focus jumps from the last expr in while body
                 # to while test expression
                 self.clear_debug_view()
 
-            with open(frame_info.filename, "rb") as fp:
+            with tokenize.open(frame_info.filename) as fp:
                 whole_source = fp.read()
 
             lines = whole_source.splitlines()
@@ -730,8 +731,8 @@ class BaseExpressionBox:
             lambda _: get_workbench().event_generate("ObjectSelect", object_id=value.id),
         )
 
-    def _load_expression(self, whole_source, filename, text_range):
-
+    def _load_expression(self, whole_source: str, filename, text_range):
+        assert isinstance(whole_source, str)
         root = ast_utils.parse_source(whole_source, filename)
         main_node = ast_utils.find_expression(root, text_range)
 
@@ -941,6 +942,7 @@ class DialogVisualizer(CommonDialog, FrameVisualizer):
 
         self._load_code(frame_info)
         self._text_frame.text.focus()
+        self.wm_deiconify()
         self.update()
 
     def _init_layout_widgets(self, master, frame_info):
@@ -1125,7 +1127,6 @@ class ExceptionView(TextFrame):
 
         self.text.configure(foreground=get_syntax_options_for_tag("stderr")["foreground"])
         for line, frame_id, filename, lineno in exception_lines_with_frame_info:
-
             if frame_id is not None:
                 frame_tag = "frame_%d" % frame_id
 
@@ -1183,7 +1184,8 @@ def _start_debug_enabled():
     return (
         _current_debugger is None
         and get_workbench().get_editor_notebook().get_current_editor() is not None
-        and "debug" in get_runner().get_supported_features()
+        and get_runner().get_backend_proxy()
+        and get_runner().get_backend_proxy().can_debug()
     )
 
 
@@ -1278,7 +1280,6 @@ def run_preferred_debug_command():
 
 
 def load_plugin() -> None:
-
     global RESUME_COMMAND_CAPTION
     RESUME_COMMAND_CAPTION = tr("Resume")
 

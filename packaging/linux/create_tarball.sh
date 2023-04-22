@@ -41,8 +41,8 @@ $TARGET_DIR/bin/python3.10 -s -m pip install distro
 $TARGET_DIR/bin/python3.10 -s -m pip install certifi
 
 # INSTALL THONNY ###################################
-#$TARGET_DIR/bin/python3.10 -s -m pip install --pre --no-cache-dir thonny
-$TARGET_DIR/bin/python3.10 -s -m pip install ../setuptools/thonny-4.0.0.dev0-py3-none-any.whl
+$TARGET_DIR/bin/python3.10 -s -m pip install --pre --no-cache-dir thonny
+#$TARGET_DIR/bin/python3.10 -s -m pip install ../setuptools/thonny-4.0.0b3.dev0-py3-none-any.whl
 
 VERSION=$(<$TARGET_DIR/lib/python3.10/site-packages/thonny/VERSION)
 ARCHITECTURE="$(uname -m)"
@@ -125,7 +125,7 @@ cp ../../*LICENSE.txt $TARGET_DIR
 
 # put it together
 mkdir -p dist
-tar -cvzf dist/${VERSION_NAME}-alt.tar.gz -C build thonny
+tar -cvzf dist/${VERSION_NAME}.tar.gz -C build thonny
 
 # XXL ###########################################################
 
@@ -145,7 +145,8 @@ DOWNINSTALL_TARGET=dist/$DOWNINSTALL_FILENAME
 cp downinstall_template.sh $DOWNINSTALL_TARGET
 sed -i "s/_VERSION_/${VERSION}/g" $DOWNINSTALL_TARGET
 sed -i "s/_VARIANT_/thonny/g" $DOWNINSTALL_TARGET
-sed -i "s/_DEPS_/$(tr '\n' ' ' < ../requirements-regular-bundle.txt)/g" $DOWNINSTALL_TARGET
+#sed -i "s/_DEPS_/$(tr '\n' ' ' < ../requirements-regular-bundle.txt)/g" $DOWNINSTALL_TARGET
+./insert_deps.py ../requirements-regular-bundle.txt $DOWNINSTALL_TARGET
 
 # xxl
 #XXL_DOWNINSTALL_FILENAME=thonny-xxl-$VERSION.bash
