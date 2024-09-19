@@ -1,5 +1,4 @@
-# These minimal deps are meant to match available packages on Ubuntu 20.04LTS
-jedi>=0.15.2
+jedi>=0.18.1
 setuptools>=45.2
 pyserial>=3.4
 pylint>=2.4
@@ -7,4 +6,6 @@ docutils>=0.16
 mypy>=0.761
 asttokens>=2.0
 Send2Trash>=1.5
-esptool>=3.2
+esptool>=4.7
+# wheel is required by pipkin, which is currently vendored
+wheel

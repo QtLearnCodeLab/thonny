@@ -1,23 +1,22 @@
 # -*- coding: utf-8 -*-
-
-import os.path
-import platform
-import tkinter as tk
-import tkinter.font as tk_font
-import traceback
-from logging import getLogger
-from tkinter import messagebox, ttk
-
 import ast
 import collections
 import importlib
+import os.path
 import pkgutil
+import platform
 import queue
 import re
 import shutil
 import socket
 import sys
+import tkinter as tk
+import tkinter.font as tk_font
+import traceback
+import webbrowser
+from logging import getLogger
 from threading import Thread
+from tkinter import messagebox, ttk
 from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple, Type, Union, cast
 from warnings import warn
 
@@ -38,27 +37,28 @@ from thonny.editors import EditorNotebook, is_local_path
 from thonny.languages import tr
 from thonny.misc_utils import (
     copy_to_clipboard,
+    get_menu_char,
     running_on_linux,
     running_on_mac_os,
     running_on_rpi,
     running_on_windows,
-    get_user_site_packages_dir_for_base,
 )
 from thonny.running import BackendProxy, Runner
 from thonny.shell import ShellView
 from thonny.ui_utils import (
     AutomaticNotebook,
     AutomaticPanedWindow,
+    caps_lock_is_on,
+    create_action_label,
     create_tooltip,
+    ems_to_pixels,
+    get_hyperlink_cursor,
     get_style_configuration,
     lookup_style_option,
     register_latin_shortcut,
     select_sequence,
     sequence_to_accelerator,
-    caps_lock_is_on,
     shift_is_pressed,
-    get_hyperlink_cursor,
-    ems_to_pixels,
 )
 
 logger = getLogger(__name__)
@@ -116,6 +116,7 @@ class Workbench(tk.Tk):
     """
 
     def __init__(self) -> None:
+        logger.info("Starting Workbench")
         thonny._workbench = self
         self.ready = False
         self._closing = False
@@ -164,9 +165,12 @@ class Workbench(tk.Tk):
         )
 
         assistance.init()
+        logger.info("Creating runner")
         self._runner = Runner()
         self._init_hooks()  # Plugins may register hooks, so initialized them before to load plugins.
+        logger.info("Start loading plugins")
         self._load_plugins()
+        logger.info("Done loading plugins")
 
         self._editor_notebook = None  # type: Optional[EditorNotebook]
         self._init_fonts()
@@ -178,7 +182,6 @@ class Workbench(tk.Tk):
         assert self._editor_notebook is not None
 
         self._init_program_arguments_frame()
-        # self._init_backend_switcher()
         self._init_regular_mode_link()  # TODO:
 
         self._show_views()
@@ -193,6 +196,7 @@ class Workbench(tk.Tk):
             self.report_exception()
 
         self._editor_notebook.focus_set()
+        logger.info("Opening views")
         self._try_action(self._open_views)
 
         self.bind_class("EditorCodeViewText", "<<CursorMove>>", self.update_title, True)
@@ -229,6 +233,14 @@ class Workbench(tk.Tk):
         self.ready = True
         self.event_generate("WorkbenchReady")
         self._editor_notebook.update_appearance()
+        if self._configuration_manager.error_reading_existing_file:
+            messagebox.showerror(
+                "Problem",
+                f"Previous configuration could not be read:\n\n"
+                f"{self._configuration_manager.error_reading_existing_file}).\n\n"
+                "Using default settings",
+                master=self,
+            )
 
     def _make_sanity_checks(self):
         home_dir = os.path.expanduser("~")
@@ -252,7 +264,7 @@ class Workbench(tk.Tk):
 
     def _init_configuration(self) -> None:
         self._configuration_manager = try_load_configuration(thonny.CONFIGURATION_FILE)
-        self._configuration_pages = []  # type: List[Tuple[str, str, Type[tk.Widget]]]
+        self._configuration_pages = []  # type: List[Tuple[str, str, Type[tk.Widget], int]]
 
         self.set_default("general.single_instance", thonny.SINGLE_INSTANCE_DEFAULT)
         self.set_default("general.ui_mode", "simple" if running_on_rpi() else "regular")
@@ -290,7 +302,7 @@ class Workbench(tk.Tk):
         self.set_default("layout.top", 50)
         self.set_default("layout.left", 150)
         if self.in_simple_mode():
-            self.set_default("layout.width", 1050)
+            self.set_default("layout.width", 1130)
             self.set_default("layout.height", 700)
         else:
             self.set_default("layout.width", 800)
@@ -324,9 +336,6 @@ class Workbench(tk.Tk):
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         self.bind("<Configure>", self._on_configure, True)
 
-    def _init_statusbar(self):
-        self._statusbar = ttk.Frame(self)
-
     def _init_icon(self) -> None:
         # Window icons
         if running_on_linux() and ui_utils.get_tk_version_info() >= (8, 6):
@@ -355,7 +364,7 @@ class Workbench(tk.Tk):
             if "custom" in opts:
                 del opts["custom"]
             self._menubar = tk.Menu(self, **opts)
-            if self.get_ui_mode() != "simple":
+            if self.get_ui_mode() != "simple" or running_on_mac_os():
                 self["menu"] = self._menubar
         self._menus = {}  # type: Dict[str, tk.Menu]
         self._menu_item_specs = (
@@ -396,6 +405,7 @@ class Workbench(tk.Tk):
                 logger.debug("Skipping plug-in %s", module_name)
             else:
                 try:
+                    logger.debug("Importing %r", module_name)
                     m = importlib.import_module(module_name)
                     if hasattr(m, load_function_name):
                         modules.append(m)
@@ -406,6 +416,7 @@ class Workbench(tk.Tk):
             return getattr(m, "load_order_key", m.__name__)
 
         for m in sorted(modules, key=module_sort_key):
+            logger.debug("Loading %r", m.__file__)
             getattr(m, load_function_name)()
 
     def _init_fonts(self) -> None:
@@ -581,7 +592,6 @@ class Workbench(tk.Tk):
         return server_socket, secret
 
     def _init_commands(self) -> None:
-
         self.add_command(
             "exit",
             "file",
@@ -604,7 +614,7 @@ class Workbench(tk.Tk):
             "view",
             tr("Increase font size"),
             lambda: self._change_font_size(1),
-            default_sequence=select_sequence("<Control-plus>", "<Command-Shift-plus>"),
+            default_sequence=select_sequence("<Control-plus>", "<Command-plus>"),
             extra_sequences=["<Control-KP_Add>"],
             group=60,
         )
@@ -640,7 +650,6 @@ class Workbench(tk.Tk):
         )
 
         if self.get_ui_mode() == "expert":
-
             self.add_command(
                 "toggle_maximize_view",
                 "view",
@@ -685,6 +694,17 @@ class Workbench(tk.Tk):
                 group=101,
             )
 
+        self.add_command(
+            "SupportUkraine",
+            "help",
+            tr("Support Ukraine"),
+            self._support_ukraine,
+            image="Ukraine",
+            caption=tr("Support"),
+            include_in_toolbar=True,
+            group=101,
+        )
+
         if thonny.in_debug_mode():
             self.bind_all("<Control-Shift-Alt-D>", self._print_state_for_debugging, True)
 
@@ -692,8 +712,7 @@ class Workbench(tk.Tk):
         print(get_runner()._postponed_commands)
 
     def _init_containers(self) -> None:
-
-        margin = 10
+        margin = ems_to_pixels(0.6)
         # Main frame functions as
         # - a background behind padding of main_pw, without this OS X leaves white border
         # - a container to be hidden, when a view is maximized and restored when view is back home
@@ -705,16 +724,18 @@ class Workbench(tk.Tk):
         self._maximized_view = None  # type: Optional[tk.Widget]
 
         self._toolbar = ttk.Frame(main_frame, padding=0)
-        self._toolbar.grid(column=0, row=0, sticky=tk.NSEW, padx=margin, pady=(5, 0))
+        self._toolbar.grid(
+            column=0, row=0, sticky=tk.NSEW, padx=margin, pady=(ems_to_pixels(0.5), 0)
+        )
 
-        self.set_default("layout.west_pw_width", self.scale(150))
-        self.set_default("layout.east_pw_width", self.scale(150))
+        self.set_default("layout.west_pw_width", ems_to_pixels(15))
+        self.set_default("layout.east_pw_width", ems_to_pixels(15))
 
-        self.set_default("layout.s_nb_height", self.scale(150))
-        self.set_default("layout.nw_nb_height", self.scale(150))
-        self.set_default("layout.sw_nb_height", self.scale(150))
-        self.set_default("layout.ne_nb_height", self.scale(150))
-        self.set_default("layout.se_nb_height", self.scale(150))
+        self.set_default("layout.s_nb_height", ems_to_pixels(15))
+        self.set_default("layout.nw_nb_height", ems_to_pixels(15))
+        self.set_default("layout.sw_nb_height", ems_to_pixels(15))
+        self.set_default("layout.ne_nb_height", ems_to_pixels(15))
+        self.set_default("layout.se_nb_height", ems_to_pixels(15))
 
         self._main_pw = AutomaticPanedWindow(main_frame, orient=tk.HORIZONTAL)
 
@@ -769,10 +790,23 @@ class Workbench(tk.Tk):
         self._status_label = ttk.Label(self._statusbar, text="")
         self._status_label.grid(row=1, column=1, sticky="w")
 
+        # self._init_support_ukraine_bar()
         self._init_backend_switcher()
 
-    def _init_backend_switcher(self):
+    def _init_support_ukraine_bar(self) -> None:
+        ukraine_label = create_action_label(
+            self._statusbar,
+            tr("Support Ukraine"),
+            self._support_ukraine,
+            # image=self.get_image("Ukraine"),
+            # compound="left"
+        )
+        ukraine_label.grid(row=1, column=1, sticky="wsn")
 
+    def _support_ukraine(self, event=None) -> None:
+        webbrowser.open("https://github.com/thonny/thonny/wiki/Support-Ukraine")
+
+    def _init_backend_switcher(self):
         # Set up the menu
         self._backend_conf_variable = tk.StringVar(value="{}")
 
@@ -782,13 +816,18 @@ class Workbench(tk.Tk):
             menu_conf = get_style_configuration("Menu")
         self._backend_menu = tk.Menu(self._statusbar, tearoff=False, **menu_conf)
 
-        # Set up the button
-        self._backend_button = ttk.Button(self._statusbar, text="", style="Toolbutton")
+        # Set up the button.
+        self._backend_button = ttk.Button(self._statusbar, text=get_menu_char(), style="Toolbutton")
 
-        self._backend_button.grid(row=1, column=3, sticky="e")
+        self._backend_button.grid(row=1, column=3, sticky="nes")
         self._backend_button.configure(command=self._post_backend_menu)
 
     def _post_backend_menu(self):
+        from thonny.plugins.micropython.uf2dialog import (
+            show_uf2_installer,
+            uf2_device_is_present_in_bootloader_mode,
+        )
+
         menu_font = tk_font.nametofont("TkMenuFont")
 
         def choose_backend():
@@ -803,38 +842,40 @@ class Workbench(tk.Tk):
         button_text_width = menu_font.measure(self._backend_button.cget("text"))
 
         num_entries = 0
+        added_micropython_separator = False
         for backend in sorted(self.get_backends().values(), key=lambda x: x.sort_key):
             entries = backend.proxy_class.get_switcher_entries()
 
-            if not entries:
-                continue
+            for conf, label in entries:
+                if not added_micropython_separator and "MicroPython" in label:
+                    self._backend_menu.add_separator()
+                    added_micropython_separator = True
 
-            if len(entries) == 1:
                 self._backend_menu.add_radiobutton(
-                    label=backend.description,
+                    label=label,
                     command=choose_backend,
                     variable=self._backend_conf_variable,
-                    value=repr(entries[0][0]),
+                    value=repr(conf),
                 )
-            else:
-                submenu = tk.Menu(self._backend_menu, tearoff=False)
-                for conf, label in entries:
-                    submenu.add_radiobutton(
-                        label=label,
-                        command=choose_backend,
-                        variable=self._backend_conf_variable,
-                        value=repr(conf),
-                    )
-                self._backend_menu.add_cascade(label=backend.description, menu=submenu)
 
-            max_description_width = max(
-                menu_font.measure(backend.description), max_description_width
-            )
+                max_description_width = max(menu_font.measure(label), max_description_width)
         num_entries += 1
 
         # self._backend_conf_variable.set(value=self.get_option("run.backend_name"))
 
         self._backend_menu.add_separator()
+
+        if uf2_device_is_present_in_bootloader_mode():
+            self._backend_menu.add_command(
+                label=tr("Install MicroPython") + "...",
+                command=lambda: show_uf2_installer(self, "MicroPython"),
+            )
+            self._backend_menu.add_command(
+                label=tr("Install CircuitPython") + "...",
+                command=lambda: show_uf2_installer(self, "CircuitPython"),
+            )
+            self._backend_menu.add_separator()
+
         self._backend_menu.add_command(
             label=tr("Configure interpreter..."),
             command=lambda: self.show_options("interpreter"),
@@ -864,15 +905,15 @@ class Workbench(tk.Tk):
     def _on_backend_restart(self, event):
         proxy = get_runner().get_backend_proxy()
         if proxy:
-            desc = proxy.get_clean_description()
-            self._backend_conf_variable.set(value=repr(proxy.get_current_switcher_configuration()))
+            conf = proxy.get_current_switcher_configuration()
+            desc = proxy.get_switcher_configuration_label(conf)
+            value = repr(conf)
         else:
-            backend_conf = self._backends.get(self.get_option("run.backend_name"), None)
-            if backend_conf:
-                desc = backend_conf.description
-            else:
-                desc = "<no backend>"
-        self._backend_button.configure(text=desc + " ☰")
+            desc = "<no backend>"
+            value = "n/a"
+
+        self._backend_conf_variable.set(value=value)
+        self._backend_button.configure(text=desc + "  " + get_menu_char())
 
     def _init_theming(self) -> None:
         self._style = ttk.Style()
@@ -1055,7 +1096,7 @@ class Workbench(tk.Tk):
         if include_in_menu:
 
             def dispatch_from_menu():
-                # I don't like that Tk menu toggles checbutton variable
+                # I don't like that Tk menu toggles checkbutton variable
                 # automatically before calling the handler.
                 # So I revert the toggle before calling the actual handler.
                 # This way the handler doesn't have to worry whether it
@@ -1188,11 +1229,12 @@ class Workbench(tk.Tk):
             sort_key if sort_key is not None else description,
         )
 
+        self.set_default(f"{name}.last_configurations", [])
+
         # assing names to related classes
         proxy_class.backend_name = name  # type: ignore
         proxy_class.backend_description = description  # type: ignore
-        if not getattr(config_page_constructor, "backend_name", None):
-            config_page_constructor.backend_name = name
+        config_page_constructor.backend_name = name
 
     def add_ui_theme(
         self,
@@ -1366,7 +1408,6 @@ class Workbench(tk.Tk):
             return "Default Light"
 
     def uses_dark_ui_theme(self) -> bool:
-
         name = self._style.theme_use()
         while True:
             if "dark" in name.lower():
@@ -1604,7 +1645,6 @@ class Workbench(tk.Tk):
     def get_image(
         self, filename: str, tk_name: Optional[str] = None, disabled=False
     ) -> tk.PhotoImage:
-
         if filename in self._image_mapping_by_theme[self._current_theme_name]:
             filename = self._image_mapping_by_theme[self._current_theme_name][filename]
 
@@ -1684,9 +1724,12 @@ class Workbench(tk.Tk):
             return False
 
         if view.hidden:  # type: ignore
-            notebook.insert(
-                "auto", view.home_widget, text=self._view_records[view_id]["label"]  # type: ignore
-            )
+            label = None
+            if hasattr(view, "get_tab_text"):
+                label = view.get_tab_text()
+            if not label:
+                label = self._view_records[view_id]["label"]
+            notebook.insert("auto", view.home_widget, text=label)  # type: ignore
             view.hidden = False  # type: ignore
             if hasattr(view, "on_show"):  # type: ignore
                 view.on_show()
@@ -1939,7 +1982,6 @@ class Workbench(tk.Tk):
         tester: Optional[Callable[[], bool]],
         toolbar_group: int,
     ) -> None:
-
         assert caption is not None and len(caption) > 0, (
             "Missing caption for '%s'. Toolbar commands must have caption." % command_label
         )
@@ -1949,7 +1991,7 @@ class Workbench(tk.Tk):
             if self.in_simple_mode():
                 padx = 0  # type: Union[int, Tuple[int, int]]
             else:
-                padx = (0, 10)
+                padx = (0, ems_to_pixels(1))
             group_frame.grid(row=0, column=toolbar_group, padx=padx)
         else:
             group_frame = slaves[0]
@@ -2058,7 +2100,6 @@ class Workbench(tk.Tk):
         self.geometry("{0}x{1}+{2}+{3}".format(new_width, geo[1], geo[2], geo[3]))
 
     def _change_font_size(self, delta: int) -> None:
-
         if delta != 0:
             editor_font_size = self.get_option("view.editor_font_size")
             editor_font_size += delta
@@ -2217,7 +2258,6 @@ class Workbench(tk.Tk):
                     menu.entryconfigure(i, state=tk.DISABLED)
 
     def _find_location_for_menu_item(self, menu_name: str, command_label: str) -> Union[str, int]:
-
         menu = self.get_menu(menu_name)
 
         if menu.index("end") == None:  # menu is empty
@@ -2326,6 +2366,10 @@ class Workbench(tk.Tk):
 
             self._closing = True
 
+            runner = get_runner()
+            if runner is not None:
+                runner.destroy_backend()
+
             # Tk clipboard gets cleared on exit and won't end up in system clipboard
             # https://bugs.python.org/issue1207592
             # https://stackoverflow.com/questions/26321333/tkinter-in-python-3-4-on-windows-dont-post-internal-clipboard-data-to-the-windo
@@ -2336,7 +2380,7 @@ class Workbench(tk.Tk):
                 ):
                     # Looks like the clipboard contains file name(s)
                     # Most likely this means actual file cut/copy operation
-                    # was made outside of Thonny.
+                    # was made outside Thonny.
                     # Don't want to replace this with simple string data of file names.
                     pass
                 else:
@@ -2348,12 +2392,7 @@ class Workbench(tk.Tk):
             logger.exception("Error while destroying workbench")
 
         finally:
-            try:
-                super().destroy()
-            finally:
-                runner = get_runner()
-                if runner != None:
-                    runner.destroy_backend()
+            super().destroy()
 
     def _on_configure(self, event) -> None:
         # called when window is moved or resized
@@ -2374,6 +2413,8 @@ class Workbench(tk.Tk):
         sys.last_traceback = tb
         if isinstance(val, KeyboardInterrupt):
             # no need to report this, just let it close
+            logger.info("Got KeyboardInterrupt, closing")
+            self._on_close()
             return
         self.report_exception()
 

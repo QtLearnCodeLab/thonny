@@ -16,6 +16,9 @@ mkdir -p build
 # copy template #################################################
 cp -R -H $PREFIX/Thonny.app build
 
+chmod 644  build/Thonny.app/Contents/Frameworks/Python.framework/Versions/3.10/lib/libtcl8.6.dylib
+chmod 644 build/Thonny.app/Contents/Frameworks/Python.framework/Versions/3.10/lib/libtk8.6.dylib
+
 # update template (might have changed after last create_base_bundle.sh) #####################
 cp $SCRIPT_DIR/Thonny.app.initial_template/Contents/MacOS/* \
     build/Thonny.app/Contents/MacOS
@@ -33,6 +36,13 @@ export SDKROOT=~/MacOSX10.9.sdk
 
 $PYTHON_CURRENT/bin/python3.10 -s -m pip install --no-cache-dir wheel
 
+# Force Universal2 builds for certain deps, which would come single arch otherwise
+$PYTHON_CURRENT/bin/python3.10 -s -m pip install universal_dists/bitarray-2.9.2-cp310-cp310-macosx_10_9_universal2.whl
+$PYTHON_CURRENT/bin/python3.10 -s -m pip install universal_dists/cffi-1.17.1-cp310-cp310-macosx_10_9_universal2.whl
+$PYTHON_CURRENT/bin/python3.10 -s -m pip install universal_dists/PyYAML-6.0.2-cp310-cp310-macosx_10_9_universal2.whl
+$PYTHON_CURRENT/bin/python3.10 -s -m pip install universal_dists/cryptography-38.0.4-cp36-abi3-macosx_10_10_universal2.whl
+$PYTHON_CURRENT/bin/python3.10 -s -m pip install universal_dists/websockets-11.0.3-cp310-cp310-macosx_10_9_universal2.whl
+
 for req_file in $req_files
 do
 	echo "installing from $req_file"
@@ -40,8 +50,10 @@ do
 done
 $PYTHON_CURRENT/bin/python3.10 -s -m pip install --no-cache-dir certifi
 $PYTHON_CURRENT/bin/python3.10 -s -m pip install --pre --no-cache-dir "thonny==${VERSION}"
+#$PYTHON_CURRENT/bin/python3.10 -s -m pip install ../setuptools/thonny-4.1.0b1.dev0-py3-none-any.whl
 
 rm $PYTHON_CURRENT/bin/thonny # because Thonny is not supposed to run from there
+
 
 # save some space ###################################################
 rm -rf $FRAMEWORKS/Tcl.framework/Versions/8.6/Tcl_debug

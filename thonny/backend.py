@@ -1,9 +1,6 @@
 # -*- coding: utf-8 -*-
-import warnings
-
 import _thread
 import io
-from logging import getLogger
 import os.path
 import pathlib
 import queue
@@ -12,31 +9,35 @@ import sys
 import threading
 import time
 import traceback
-from abc import abstractmethod, ABC
-from typing import BinaryIO, Callable, List, Dict, Optional, Iterable, Union, Any
+import warnings
+from abc import ABC, abstractmethod
+from logging import getLogger
+from typing import Any, BinaryIO, Callable, Dict, Iterable, List, Optional, Tuple, Union
 
 import thonny
 from thonny import report_time
-from thonny.common import (
+from thonny.common import (  # TODO: try to get rid of this
+    IGNORED_FILES_AND_DIRS,
+    PROCESS_ACK,
     BackendEvent,
+    CommandToBackend,
     EOFCommand,
+    ImmediateCommand,
     InlineCommand,
     InlineResponse,
     InputSubmission,
+    MessageFromBackend,
     ToplevelCommand,
     ToplevelResponse,
-    parse_message,
-    serialize_message,
-    ImmediateCommand,
-    MessageFromBackend,
-    CommandToBackend,
-    universal_dirname,
-    read_one_incoming_message_str,
-    try_load_modules_with_frontend_sys_path,
     UserError,
+    execute_with_frontend_sys_path,
+    is_local_path,
+    parse_message,
+    read_one_incoming_message_str,
+    serialize_message,
+    try_load_modules_with_frontend_sys_path,
+    universal_dirname,
 )
-from thonny.common import IGNORED_FILES_AND_DIRS  # TODO: try to get rid of this
-from thonny.common import ConnectionClosedException
 
 NEW_DIR_MODE = 0o755
 
@@ -59,35 +60,52 @@ class BaseBackend(ABC):
         # NB! This approach is used only in MicroPython and SshCPython backend.
         # MainCPython backend uses main thread for reading commands
         # https://github.com/thonny/thonny/issues/1363
-        _thread.start_new_thread(self._read_incoming_messages, ())
+        threading.Thread(target=self._read_incoming_messages, daemon=True).start()
 
     def mainloop(self):
         report_time("Beginning of mainloop")
 
         try:
-            while self._should_keep_going():
+            while True:
+                self._check_for_connection_error()
                 try:
-                    try:
-                        msg = self._fetch_next_incoming_message(timeout=0.01)
-                    except queue.Empty:
-                        self._perform_idle_tasks()
-                    else:
-                        if isinstance(msg, InputSubmission):
-                            self._handle_user_input(msg)
-                        elif isinstance(msg, EOFCommand):
-                            self._handle_eof_command(msg)
-                        else:
-                            self._current_command = msg
-                            self._handle_normal_command(msg)
+                    msg = self._fetch_next_incoming_message(timeout=0.01)
                 except KeyboardInterrupt:
-                    self._send_output("KeyboardInterrupt", "stderr")  # CPython idle REPL does this
+                    self._send_output(
+                        "\nKeyboardInterrupt", "stderr"
+                    )  # CPython idle REPL does this
                     self.send_message(ToplevelResponse())
-                except Exception:
-                    # Error in Thonny's code
-                    logger.exception("mainloop error")
-                    self._report_internal_exception("mainloop error")
-        except ConnectionClosedException:
+                except queue.Empty:
+                    self._perform_idle_tasks()
+                else:
+                    if isinstance(msg, InputSubmission):
+                        self._handle_user_input(msg)
+                    elif isinstance(msg, EOFCommand):
+                        self._handle_eof_command(msg)
+                    else:
+                        self._current_command = msg
+                        self._handle_normal_command(msg)
+        except KeyboardInterrupt:
+            self._send_output("\nKeyboardInterrupt", "stderr")
             sys.exit(0)
+        except ConnectionError as e:
+            self.handle_connection_error(e)
+        except Exception:
+            # Error in Thonny's code
+            logger.exception("mainloop error")
+            self._report_internal_exception("mainloop error")
+
+        logger.info("After mainloop")
+        sys.exit(17)
+
+    def handle_connection_error(self, error=None):
+        logger.info("Handling connection error")
+        message = "Connection lost"
+        if error:
+            message += " -- " + str(error)
+        self._send_output("\n" + message + "\n", "stderr")
+        self._send_output("\n" + "Use Stop/Restart to reconnect." + "\n", "stderr")
+        sys.exit(1)
 
     def _current_command_is_interrupted(self):
         return getattr(self._current_command, "interrupted", False)
@@ -124,7 +142,7 @@ class BaseBackend(ABC):
 
     def _read_incoming_messages(self):
         # works in a separate thread
-        while self._should_keep_going():
+        while True:
             if not self._read_one_incoming_message():
                 break
 
@@ -206,9 +224,8 @@ class BaseBackend(ABC):
         print(user_msg, file=sys.stderr)
 
     @abstractmethod
-    def _should_keep_going(self) -> bool:
-        """Returns False when there is no point in processing more commands
-        (eg. connection to the target process is lost or target process has exited)"""
+    def _check_for_connection_error(self) -> None:
+        ...
 
     @abstractmethod
     def _handle_user_input(self, msg: InputSubmission) -> None:
@@ -281,9 +298,6 @@ class MainBackend(BaseBackend, ABC):
                     response = {}
                 else:
                     response = {"error": "Interrupted", "interrupted": True}
-            except ConnectionClosedException as e:
-                response = False
-                self._on_connection_closed(e)
             except Exception as e:
                 logger.exception("Exception while handling %r", cmd.name)
                 self._report_internal_exception("Exception while handling %r" % cmd.name)
@@ -295,9 +309,6 @@ class MainBackend(BaseBackend, ABC):
 
         real_response = self._prepare_command_response(response, cmd)
         self.send_message(real_response)
-
-    def _on_connection_closed(self, error=None):
-        pass
 
     def _cmd_get_dirs_children_info(self, cmd):
         """Provides information about immediate children of paths opened in a file browser"""
@@ -345,13 +356,22 @@ class MainBackend(BaseBackend, ABC):
         try:
             from thonny import jedi_utils
 
+            sys_path = self._get_sys_path_for_analysis()
+
+            # add current dir for local files
+            """
+            if cmd.filename and is_local_path(cmd.filename):
+                sys_path.insert(0, os.getcwd())
+                logger.debug("editor autocomplete with %r", sys_path)
+            """
+
             with warnings.catch_warnings():
                 completions = jedi_utils.get_script_completions(
                     cmd.source,
                     cmd.row,
                     cmd.column,
                     cmd.filename,
-                    sys_path=self._get_sys_path_for_analysis(),
+                    sys_path=sys_path,
                 )
         except ImportError:
             completions = []
@@ -396,8 +416,8 @@ class MainBackend(BaseBackend, ABC):
         )
 
     def _cmd_get_shell_calltip(self, cmd):
-        from thonny import jedi_utils
         import __main__
+        from thonny import jedi_utils
 
         signatures = jedi_utils.get_interpreter_signatures(
             cmd.source, [__main__.__dict__], sys_path=self._get_sys_path_for_analysis()
@@ -436,6 +456,15 @@ class MainBackend(BaseBackend, ABC):
             sys_path=self._get_sys_path_for_analysis(),
         )
         return {"definitions": defs}
+
+    def _cmd_get_active_distributions(self, cmd):
+        raise NotImplementedError()
+
+    def _cmd_install_distributions(self, cmd):
+        raise NotImplementedError()
+
+    def _cmd_uninstall_distributions(self, cmd):
+        raise NotImplementedError()
 
     def _get_sys_path_for_analysis(self) -> Optional[List[str]]:
         return None
@@ -516,10 +545,15 @@ class UploadDownloadMixin(ABC):
         return {"errors": errors}
 
     def _cmd_upload(self, cmd):
+        def upload_file_wrapper(source_path, target_path, callback):
+            self._upload_file(
+                source_path, target_path, callback, cmd["make_shebang_scripts_executable"]
+            )
+
         errors = self._transfer_files_and_dirs(
             cmd.items,
             self._ensure_remote_directory,
-            self._upload_file,
+            upload_file_wrapper,
             cmd,
             pathlib.PurePosixPath,
         )
@@ -543,7 +577,13 @@ class UploadDownloadMixin(ABC):
         with io.BytesIO() as fp:
             fp.write(cmd["content_bytes"])
             fp.seek(0)
-            self._write_file(fp, cmd["path"], len(cmd["content_bytes"]), callback)
+            self._write_file(
+                fp,
+                cmd["path"],
+                file_size=len(cmd["content_bytes"]),
+                callback=callback,
+                make_shebang_scripts_executable=cmd["make_shebang_scripts_executable"],
+            )
 
         return InlineResponse(
             command_name="write_file", path=cmd["path"], editor_id=cmd.get("editor_id")
@@ -560,7 +600,6 @@ class UploadDownloadMixin(ABC):
         cmd,
         target_path_class,
     ) -> List[str]:
-
         total_cost = 0
         for item in items:
             if item["kind"] == "file":
@@ -610,13 +649,16 @@ class UploadDownloadMixin(ABC):
         with open(target_path, "bw") as target_fp:
             self._read_file(source_path, target_fp, callback)
 
-    def _upload_file(self, source_path, target_path, callback):
+    def _upload_file(
+        self, source_path, target_path, callback, make_shebang_scripts_executable: bool
+    ):
         with open(source_path, "br") as source_fp:
             self._write_file(
                 source_fp,
                 target_path,
                 os.path.getsize(source_path),
                 callback,
+                make_shebang_scripts_executable,
             )
 
     def _get_dir_transfer_cost(self):
@@ -652,6 +694,7 @@ class UploadDownloadMixin(ABC):
         target_path: str,
         file_size: int,
         callback: Callable[[int, int], None],
+        make_shebang_scripts_executable: bool,
     ) -> None:
         raise NotImplementedError()
 
@@ -703,21 +746,14 @@ class RemoteProcess:
 class SshMixin(UploadDownloadMixin):
     def __init__(self, host, user, password, interpreter, cwd):
         # UploadDownloadMixin.__init__(self)
-        try:
-            import paramiko
-            from paramiko.client import SSHClient, AutoAddPolicy
-        except ImportError:
-            print(
-                "\nThis back-end requires an extra package named 'paramiko'."
-                " Install it from 'Tools => Manage plug-ins' or via your system package manager.",
-                file=sys.stderr,
-            )
-            sys.exit()
+        execute_with_frontend_sys_path(self._try_load_paramiko)
+        import paramiko
+        from paramiko.client import AutoAddPolicy, SSHClient
 
         self._host = host
         self._user = user
         self._password = password
-        self._remote_interpreter = interpreter
+        self._target_interpreter = interpreter
         self._cwd = cwd
         self._proc = None  # type: Optional[RemoteProcess]
         self._sftp = None  # type: Optional[paramiko.SFTPClient]
@@ -726,6 +762,18 @@ class SshMixin(UploadDownloadMixin):
         self._client.set_missing_host_key_policy(paramiko.client.AutoAddPolicy())
         # TODO: does it get closed properly after process gets killed?
         self._connect()
+
+    def _try_load_paramiko(self):
+        try:
+            import paramiko.client
+        except ImportError:
+            logger.info("Could not import paramiko")
+            print(
+                "\nThis back-end requires an extra package named 'paramiko'."
+                " Install it from 'Tools => Manage plug-ins' or via your system package manager.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
 
     def _connect(self):
         from paramiko import SSHException
@@ -767,6 +815,9 @@ class SshMixin(UploadDownloadMixin):
 
         # stderr gets directed to stdout because of pty
         pid = stdout.readline().strip()
+        ack = stdout.readline().strip()
+        if ack != PROCESS_ACK:
+            raise RuntimeError(f"Got {ack!r} instead of expected {PROCESS_ACK!r}")
         channel = stdout.channel
 
         return RemoteProcess(self._client, channel, stdin, stdout, pid)
@@ -789,7 +840,6 @@ class SshMixin(UploadDownloadMixin):
         pass
 
     def _get_sftp(self, fresh: bool):
-
         if fresh and self._sftp is not None:
             self._sftp.close()
             self._sftp = None
@@ -815,10 +865,25 @@ class SshMixin(UploadDownloadMixin):
         target_path: str,
         file_size: int,
         callback: Callable[[int, int], None],
+        make_shebang_scripts_executable: bool,
     ) -> None:
+        logger.info("Writing bytes to %r", target_path)
+        if make_shebang_scripts_executable:
+            source_fp, has_shebang = convert_newlines_if_has_shebang(source_fp)
+        else:
+            has_shebang = None
+
         self._perform_sftp_operation_with_retry(
             lambda sftp: sftp.putfo(source_fp, target_path, callback)
         )
+
+        logger.debug(
+            "make_shebang_scripts_executable: %r, has_shebang: %r",
+            make_shebang_scripts_executable,
+            has_shebang,
+        )
+        if make_shebang_scripts_executable and has_shebang:
+            self._perform_sftp_operation_with_retry(lambda sftp: sftp.chmod(target_path, 0o755))
 
     def _perform_sftp_operation_with_retry(self, operation) -> Any:
         try:
@@ -877,7 +942,6 @@ def ensure_posix_directory(
         return
 
     for step in list(reversed(list(map(str, pathlib.PurePosixPath(path).parents)))) + [path]:
-
         if step != "/":
             mode = stat_mode_fun(step)
             if mode is None:
@@ -915,6 +979,19 @@ def delete_stored_ssh_password():
     if os.path.exists(get_ssh_password_file_path()):
         # invalidate stored password
         os.remove(get_ssh_password_file_path())
+
+
+def convert_newlines_if_has_shebang(fp: BinaryIO) -> Tuple[BinaryIO, bool]:
+    if fp.read(3) == b"#!/":
+        fp.seek(0)
+        new_fp = io.BytesIO()
+        new_fp.write(fp.read().replace(b"\r\n", b"\n"))
+        fp.close()
+        new_fp.seek(0)
+        return new_fp, True
+    else:
+        fp.seek(0)
+        return fp, False
 
 
 if __name__ == "__main__":

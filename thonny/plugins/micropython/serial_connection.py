@@ -1,25 +1,24 @@
-from logging import getLogger
 import pathlib
 import sys
 import threading
 import time
+from logging import getLogger
 from textwrap import dedent
 
-from thonny.plugins.micropython.bare_metal_backend import (
-    NORMAL_PROMPT,
-    FIRST_RAW_PROMPT,
-    OUTPUT_ENQ,
-    OUTPUT_ACK,
-)
-from thonny.common import ConnectionFailedException
-from thonny.plugins.micropython.connection import MicroPythonConnection
+from .connection import MicroPythonConnection
+
+OUTPUT_ENQ = b"\x05"
+OUTPUT_ACK = b"\x06"
+
+NORMAL_PROMPT = b">>> "
+FIRST_RAW_PROMPT = b"raw REPL; CTRL-B to exit\r\n>"
+
 
 logger = getLogger(__name__)
 
 
 class SerialConnection(MicroPythonConnection):
-    def __init__(self, port, baudrate, dtr=None, rts=None, skip_reader=False):
-
+    def __init__(self, port, baudrate=115200, dtr=None, rts=None, skip_reader=False):
         import serial
         from serial.serialutil import SerialException
 
@@ -77,7 +76,7 @@ class SerialConnection(MicroPythonConnection):
             elif error.errno == 16:
                 message += "\n\n" + "Try restarting the device."
 
-            raise ConnectionFailedException(message)
+            raise ConnectionRefusedError(message)
 
         if skip_reader:
             self._reading_thread = None
@@ -85,7 +84,7 @@ class SerialConnection(MicroPythonConnection):
             self._reading_thread = threading.Thread(target=self._listen_serial, daemon=True)
             self._reading_thread.start()
 
-    def write(self, data):
+    def write(self, data: bytes) -> int:
         size = self._serial.write(data)
         # print(data.decode(), end="")
         assert size == len(data)
@@ -141,9 +140,6 @@ class SerialConnection(MicroPythonConnection):
     def outgoing_is_empty(self):
         return self._serial.out_waiting == 0
 
-    def reset_output_buffer(self):
-        self._serial.reset_output_buffer()
-
     def close(self):
         if self._serial is not None:
             try:
@@ -162,7 +158,6 @@ class DifficultSerialConnection(SerialConnection):
     """For hardening the communication protocol"""
 
     def _make_output_available(self, data, block=True):
-
         # output prompts in parts
         if FIRST_RAW_PROMPT in data or NORMAL_PROMPT in data:
             if FIRST_RAW_PROMPT in data:

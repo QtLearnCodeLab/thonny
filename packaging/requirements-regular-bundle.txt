@@ -1,12 +1,14 @@
-jedi==0.18.*
+jedi==0.19.*
 pyserial==3.5
-pylint==2.12.*
-docutils==0.18.*
-mypy==0.931.*
-asttokens==2.0.*
-Send2Trash==1.8.1b0
-esptool==3.2.*
-paramiko==2.9.*
-ptyprocess==0.7.*
-websockets==10.*
+pylint==3.2.*
+docutils==0.21.*
+mypy==1.11.*
+asttokens==2.4.*
+Send2Trash==1.8.*
+esptool==4.7.*
+paramiko==3.4.*
+websockets==13.0.*
+ptyprocess==0.7.*; sys_platform == "linux" or sys_platform == "darwin"
+adafruit_board_toolkit==1.1.*; sys_platform == "win32" or sys_platform == "darwin"
+
 

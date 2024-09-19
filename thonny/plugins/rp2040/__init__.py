@@ -1,15 +1,18 @@
 from logging import getLogger
-from typing import Optional
+from typing import List
 
-from thonny.plugins.micropython import (
-    BareMetalMicroPythonProxy,
-    add_micropython_backend,
+from thonny.plugins.micropython import add_micropython_backend
+from thonny.plugins.micropython.mp_common import RAW_PASTE_SUBMIT_MODE
+from thonny.plugins.micropython.mp_front import (
     BareMetalMicroPythonConfigPage,
+    BareMetalMicroPythonProxy,
+    get_uart_adapter_vids_pids,
 )
-from thonny.plugins.micropython.bare_metal_backend import RAW_PASTE_SUBMIT_MODE
-from thonny.plugins.micropython.uf2dialog import Uf2FlashingDialog
+from thonny.plugins.micropython.uf2dialog import show_uf2_installer
 
 logger = getLogger(__name__)
+
+VIDS_PIDS_TO_AVOID_IN_RP2040 = set()
 
 
 class RP2040BackendProxy(BareMetalMicroPythonProxy):
@@ -22,22 +25,30 @@ class RP2040BackendProxy(BareMetalMicroPythonProxy):
         # can be anything
         return set()
 
-    @classmethod
-    def device_is_present_in_bootloader_mode(cls):
-        return bool(Uf2FlashingDialog.get_possible_targets())
-
     def get_node_label(self):
         return "RP2040 device"
 
     def _get_backend_launcher_path(self) -> str:
-        import thonny.plugins.rp2040.rp2040_backend
+        import thonny.plugins.rp2040.rp2040_back
 
-        return thonny.plugins.rp2040.rp2040_backend.__file__
+        return thonny.plugins.rp2040.rp2040_back.__file__
+
+    @classmethod
+    def get_vids_pids_to_avoid(self):
+        return get_uart_adapter_vids_pids() | VIDS_PIDS_TO_AVOID_IN_RP2040
 
 
 class RP2040BackendConfigPage(BareMetalMicroPythonConfigPage):
-    def _has_flashing_dialog(self):
-        return False
+    def get_flashing_dialog_kinds(self) -> List[str]:
+        return [""]
+
+    def _open_flashing_dialog(self, kind: str) -> None:
+        assert kind == ""
+        show_uf2_installer(self, firmware_name="MicroPython")
+
+    @property
+    def allow_webrepl(self):
+        return True
 
 
 def load_plugin():

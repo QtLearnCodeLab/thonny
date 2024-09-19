@@ -1,22 +1,30 @@
-from thonny.common import is_virtual_executable, is_private_python
+import logging
+import os.path
+import sys
+import time
+from logging import getLogger
+from typing import TYPE_CHECKING, List, Optional, cast
+
+from thonny.common import is_private_python, is_virtual_executable
 
 _last_module_count = 0
 _last_modules = set()
-import time
 
 _last_time = time.time()
 
-import sys
+
+logger = getLogger(__name__)
 
 
 def report_time(label: str) -> None:
     """
     Method for finding unwarranted imports and delays.
     """
-    return
+    # return
+
     global _last_time, _last_module_count, _last_modules
 
-    log_modules = False
+    log_modules = True
 
     t = time.time()
     mod_count = len(sys.modules)
@@ -25,11 +33,11 @@ def report_time(label: str) -> None:
         mod_info = f"(+{mod_count - _last_module_count} modules)"
     else:
         mod_info = ""
-    print("TIME/MODS", label, round(t - _last_time, 3), mod_info)
+    logger.info("TIME/MODS %s %s %s", f"{t - _last_time:.3f}", label, mod_info)
 
     if log_modules and mod_delta > 0:
         current_modules = set(sys.modules.keys())
-        print("NEW MODS", list(sorted(current_modules - _last_modules)))
+        logger.info("NEW MODS %s", list(sorted(current_modules - _last_modules)))
         _last_modules = current_modules
 
     _last_time = t
@@ -38,9 +46,6 @@ def report_time(label: str) -> None:
 
 report_time("After defining report_time")
 
-import os.path
-import logging
-from typing import TYPE_CHECKING, Optional, cast
 
 SINGLE_INSTANCE_DEFAULT = True
 BACKEND_LOG_MARKER = "Thonny's backend.log"
@@ -138,11 +143,18 @@ def is_portable():
         return abs_location.startswith("/media/") or abs_location.startswith("/mnt/")
 
 
+_THONNY_VERSION = None
+
+
 def get_version():
+    global _THONNY_VERSION
+    if _THONNY_VERSION:
+        return _THONNY_VERSION
     try:
         package_dir = os.path.dirname(sys.modules["thonny"].__file__)
         with open(os.path.join(package_dir, "VERSION"), encoding="ASCII") as fp:
-            return fp.read().strip()
+            _THONNY_VERSION = fp.read().strip()
+            return _THONNY_VERSION
     except Exception:
         return "0.0.0"
 
@@ -198,9 +210,33 @@ def _check_welcome():
 
         win = FirstRunWindow(mgr)
         win.mainloop()
+
+        if win.ok and sys.platform == "darwin":
+            macos_app_path = _get_macos_app_path()
+            if macos_app_path:
+                # Shouldn't proceed to the main window in the same process, as TkAqua will crash on opening a menu
+                # or saving a file (https://github.com/thonny/thonny/issues/2860).
+                # Let's restart.
+                print("Restarting", macos_app_path)
+                os.system(f"open -n '{macos_app_path}'")
+                sys.exit(0)
+
         return win.ok
     else:
         return True
+
+
+def _get_macos_app_path() -> Optional[str]:
+    if sys.platform != "darwin":
+        return None
+    orig_argv = _get_orig_argv()
+    if not orig_argv:
+        return None
+
+    if orig_argv[0].endswith("Thonny.app/Contents/MacOS/thonny"):
+        return orig_argv[0][: -len("/Contents/MacOS/thonny")]
+
+    return None
 
 
 def launch():
@@ -241,27 +277,19 @@ def launch():
         from thonny import workbench
 
         bench = workbench.Workbench()
-        try:
-            bench.mainloop()
-        except SystemExit:
-            bench.destroy()
+        bench.mainloop()
         return 0
 
-    except SystemExit as e:
-        from tkinter import messagebox, _default_root
-
-        messagebox.showerror("System exit", str(e), master=_default_root)
-        return -1
-
     except Exception:
-        from logging import exception
+        import tkinter as tk
         import traceback
+        from logging import exception
 
         exception("Internal launch or mainloop error")
         from thonny import ui_utils
 
         dlg = ui_utils.LongTextDialog("Internal error", traceback.format_exc())
-        ui_utils.show_dialog(dlg, get_workbench())
+        ui_utils.show_dialog(dlg, tk._default_root)
         return -1
     finally:
         runner = get_runner()
@@ -387,7 +415,7 @@ def get_frontend_log_file():
     return os.path.join(THONNY_USER_DIR, "frontend.log")
 
 
-def get_orig_argv():
+def _get_orig_argv() -> Optional[List[str]]:
     try:
         from sys import orig_argv  # since 3.10
 
@@ -398,7 +426,13 @@ def get_orig_argv():
 
         argc = ctypes.c_int()
         argv = ctypes.POINTER(ctypes.c_wchar_p if sys.version_info >= (3,) else ctypes.c_char_p)()
-        ctypes.pythonapi.Py_GetArgcArgv(ctypes.byref(argc), ctypes.byref(argv))
+        try:
+            ctypes.pythonapi.Py_GetArgcArgv(ctypes.byref(argc), ctypes.byref(argv))
+        except AttributeError:
+            # See https://github.com/thonny/thonny/issues/2206
+            # and https://bugs.python.org/issue40910
+            # This symbol is not available in thonny.exe built agains Python 3.8
+            return None
 
         # Ctypes are weird. They can't be used in list comprehensions, you can't use `in` with them, and you can't
         # use a for-each loop on them. We have to do an old-school for-i loop.
@@ -411,7 +445,7 @@ def get_orig_argv():
 
 def _configure_logging(log_file, console_level=None):
     logFormatter = logging.Formatter(
-        "%(asctime)s.%(msecs)d %(levelname)-7s %(name)s: %(message)s", "%H:%M:%S"
+        "%(asctime)s.%(msecs)03d [%(threadName)s] %(levelname)-7s %(name)s: %(message)s", "%H:%M:%S"
     )
 
     file_handler = logging.FileHandler(log_file, encoding="UTF-8", mode="w")
@@ -419,9 +453,10 @@ def _configure_logging(log_file, console_level=None):
 
     main_logger = logging.getLogger("thonny")
     contrib_logger = logging.getLogger("thonnycontrib")
+    pipkin_logger = logging.getLogger("pipkin")
 
     # NB! Don't mess with the main root logger, because (CPython) backend runs user code
-    for logger in [main_logger, contrib_logger]:
+    for logger in [main_logger, contrib_logger, pipkin_logger]:
         logger.setLevel(_choose_logging_level())
         logger.propagate = False  # otherwise it will be also reported by IDE-s root logger
         logger.addHandler(file_handler)
@@ -436,7 +471,8 @@ def _configure_logging(log_file, console_level=None):
     # Log most important info as soon as possible
     main_logger.info("Thonny version: %s", get_version())
     main_logger.info("cwd: %s", os.getcwd())
-    main_logger.info("original argv: %s", get_orig_argv())
+    main_logger.info("original argv: %s", _get_orig_argv())
+    main_logger.info("sys.executable: %s", sys.executable)
     main_logger.info("sys.argv: %s", sys.argv)
     main_logger.info("sys.path: %s", sys.path)
     main_logger.info("sys.flags: %s", sys.flags)

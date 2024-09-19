@@ -1,6 +1,6 @@
-from logging import getLogger
 import os
 import re
+from logging import getLogger
 
 from thonny import get_workbench
 from thonny.ui_utils import scale
@@ -268,7 +268,6 @@ def update_fonts():
 
 
 def load_plugin():
-
     # set custom images
     if get_workbench().get_ui_mode() == "simple" and get_workbench().winfo_screenwidth() >= 1280:
         images = {
@@ -287,6 +286,7 @@ def load_plugin():
             "resume": "resume48.png",
             "zoom": "zoom48.png",
             "quit": "quit48.png",
+            "Ukraine": "Ukraine48.png",
         }
     else:
         images = {
@@ -305,6 +305,7 @@ def load_plugin():
             "resume": "resume.png",
             "zoom": "zoom.png",
             "quit": "quit.png",
+            "Ukraine": "Ukraine.png",
         }
 
     res_dir = os.path.join(os.path.dirname(__file__), "res")

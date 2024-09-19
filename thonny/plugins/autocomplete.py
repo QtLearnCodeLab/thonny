@@ -1,20 +1,20 @@
-from logging import getLogger
 import tkinter as tk
+from logging import getLogger
 from tkinter import messagebox
-from typing import Optional, List, cast
+from typing import List, Optional, cast
 
-from thonny import get_runner, get_workbench, editor_helpers
+from thonny import editor_helpers, get_runner, get_workbench
 from thonny.codeview import CodeViewText, SyntaxText, get_syntax_options_for_tag
-from thonny.common import InlineCommand, CompletionInfo
+from thonny.common import CompletionInfo, InlineCommand
 from thonny.editor_helpers import DocuBox, EditorInfoBox
 from thonny.languages import tr
 from thonny.misc_utils import running_on_mac_os
 from thonny.shell import ShellText
 from thonny.ui_utils import (
-    ems_to_pixels,
-    control_is_pressed,
-    command_is_pressed,
     alt_is_pressed_without_char,
+    command_is_pressed,
+    control_is_pressed,
+    ems_to_pixels,
 )
 
 logger = getLogger(__name__)
@@ -171,7 +171,10 @@ class CompletionsBox(EditorInfoBox):
         self._check_request_details()
 
     def _check_request_details(self) -> None:
-        assert self.winfo_ismapped()
+        if not self.winfo_ismapped():
+            # can happen, see https://github.com/thonny/thonny/issues/2162
+            return
+
         if (
             self._details_box
             and self._details_box.is_visible()
@@ -371,6 +374,24 @@ class Completer:
         else:
             get_workbench().bell()
 
+    def _should_open_box_automatically(self, event):
+        assert isinstance(event.widget, tk.Text)
+        if not get_workbench().get_option("edit.automatic_completions"):
+            return False
+
+        # Don't autocomplete in remote shells
+        proxy = get_runner().get_backend_proxy()
+        if isinstance(event.widget, ShellText) and (not proxy or not proxy.has_local_interpreter()):
+            return False
+
+        # Don't autocomplete inside comments
+        line_prefix = event.widget.get("insert linestart", "insert")
+        if "#" in line_prefix:
+            # not very precise (eg. when inside a string), but good enough
+            return False
+
+        return True
+
     def _box_is_visible(self):
         if not self._completions_box:
             return False
@@ -403,10 +424,7 @@ class Completer:
         if widget.is_read_only():
             return
 
-        if (
-            not get_workbench().get_option("edit.automatic_completions")
-            and not self._box_is_visible()
-        ):
+        if not self._box_is_visible() and not self._should_open_box_automatically(event):
             return
 
         if event.keysym == "Escape":
@@ -499,7 +517,6 @@ def _is_python_name_char(c: str) -> bool:
 
 
 def load_plugin() -> None:
-
     completer = Completer()
 
     def can_complete():

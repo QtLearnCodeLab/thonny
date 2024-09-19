@@ -1,15 +1,14 @@
 # coding=utf-8
 """Extensions for tk.Text"""
-from logging import getLogger
 import sys
-from typing import Optional
-
 import time
+import tkinter
 import tkinter as tk
-from logging import exception
+from logging import getLogger
 from tkinter import TclError
 from tkinter import font as tkfont
 from tkinter import ttk
+from typing import Optional
 
 logger = getLogger(__name__)
 
@@ -67,12 +66,23 @@ class TweakableText(tk.Text):
             ):
                 pass
             else:
-                exception(
+                logger.exception(
                     "[_dispatch_tk_operation] operation: " + operation + ", args:" + repr(args)
                 )
                 # traceback.print_exc()
 
             return ""  # Taken from idlelib.WidgetRedirector
+
+        except Exception as e:
+            # Need to catch to avoid the crash?
+            logger.exception("Exception in _dispatch_tk_operation")
+            from tkinter import messagebox
+
+            messagebox.showerror(
+                "Internal error",
+                "Error in _dispatch_tk_operation\n" + str(e),
+                parent=tkinter._default_root,
+            )
 
     def set_read_only(self, value):
         self._read_only = value
@@ -252,6 +262,7 @@ class EnhancedText(TweakableText):
         self.bind("<Control-Delete>", if_not_readonly(self.delete_word_right), True)
         self.bind("<Control-d>", self._redirect_ctrld, True)
         self.bind("<Control-t>", self._redirect_ctrlt, True)
+        self.bind("<Control-f>", self._redirect_ctrlf, True)
         self.bind("<Shift-Control-space>", self._redirect_shift_control_space, True)
         self.bind("<BackSpace>", if_not_readonly(self.perform_smart_backspace), True)
         self.bind("<Return>", if_not_readonly(self.perform_return), True)
@@ -338,6 +349,12 @@ class EnhancedText(TweakableText):
         # I want to disable the swap effect of Ctrl-T in the text but still
         # keep the event for other purposes
         self.event_generate("<<CtrlTInText>>")
+        return "break"
+
+    def _redirect_ctrlf(self, event):
+        # I want to disable the Tk effect of Ctrl-T in the text but still
+        # keep the event for other purposes
+        self.event_generate("<<CtrlFInText>>")
         return "break"
 
     def tag_reset(self, tag_name):
@@ -732,7 +749,6 @@ class EnhancedText(TweakableText):
             self.mark_set("insert", "@%d,%d" % (event.x, event.y))
 
     def _reload_theme_options(self, event=None):
-
         style = ttk.Style()
 
         states = []
@@ -802,25 +818,27 @@ class TextFrame(ttk.Frame):
         }
         final_text_options.update(text_options)
         self.text = text_class(self, **final_text_options)
-        self.text.grid(row=0, column=2, sticky=tk.NSEW)
 
         if vertical_scrollbar:
             self._vbar = vertical_scrollbar_class(
                 self, orient=tk.VERTICAL, style=vertical_scrollbar_style
             )
-            self._vbar.grid(row=0, column=3, sticky=tk.NSEW)
             self._vbar["command"] = self._vertical_scroll
             self.text["yscrollcommand"] = self._vertical_scrollbar_update
+        else:
+            self._vbar = None
 
         if horizontal_scrollbar:
             self._hbar = horizontal_scrollbar_class(
                 self, orient=tk.HORIZONTAL, style=horizontal_scrollbar_style
             )
-            self._hbar.grid(row=1, column=0, sticky=tk.NSEW, columnspan=3)
             self._hbar["command"] = self._horizontal_scroll
             self.text["xscrollcommand"] = self._horizontal_scrollbar_update
+        else:
+            self._hbar = None
 
-        self.columnconfigure(2, weight=1)
+        self.grid_main_widgets()
+        self.columnconfigure(1, weight=1)
         self.rowconfigure(0, weight=1)
 
         self._ui_theme_change_binding = self.bind(
@@ -830,6 +848,13 @@ class TextFrame(ttk.Frame):
         # TODO: add context menu?
 
         self._reload_theme_options(None)
+
+    def grid_main_widgets(self):
+        self.text.grid(row=0, column=1, sticky=tk.NSEW)
+        if self._vbar:
+            self._vbar.grid(row=0, column=2, sticky=tk.NSEW)
+        if self._hbar:
+            self._hbar.grid(row=1, column=0, sticky=tk.NSEW, columnspan=3)
 
     def focus_set(self):
         self.text.focus_set()
@@ -1073,11 +1098,15 @@ class EnhancedTextFrame(TextFrame):
                 delta = 0
 
             if margin_line_visible_col > -1:
-                x = (
-                    get_text_font(self.text).measure((margin_line_visible_col - 1) * "M")
-                    + delta
-                    + self.text["padx"]
-                )
+                try:
+                    x = (
+                        get_text_font(self.text).measure((margin_line_visible_col - 1) * "M")
+                        + delta
+                        + self.text["padx"]
+                    )
+                except TclError:
+                    logger.exception("Could not measure text")
+                    x = -10
             else:
                 x = -10
 
@@ -1095,7 +1124,7 @@ class EnhancedTextFrame(TextFrame):
             ):  # In Python 3.6 you can use tk.EventType.ButtonPress instead of "4"
                 self.text.tag_remove("sel", "1.0", "end")
         except tk.TclError:
-            exception("on_gutter_click")
+            logger.exception("on_gutter_click")
 
     def on_gutter_double_click(self, event=None):
         try:
@@ -1103,7 +1132,7 @@ class EnhancedTextFrame(TextFrame):
             self.text.tag_remove("sel", "1.0", "end")
             self._gutter.tag_remove("sel", "1.0", "end")
         except tk.TclError:
-            exception("on_gutter_click")
+            logger.exception("on_gutter_click")
 
     def on_gutter_motion(self, event=None):
         try:
@@ -1117,7 +1146,7 @@ class EnhancedTextFrame(TextFrame):
             self.text.mark_set("insert", "%s.0" % linepos)
             self.text.focus_set()
         except tk.TclError:
-            exception("on_gutter_motion")
+            logger.exception("on_gutter_motion")
 
     def _vertical_scrollbar_update(self, *args):
         if not hasattr(self, "_vbar"):
@@ -1144,7 +1173,6 @@ class EnhancedTextFrame(TextFrame):
             self._reload_gutter_theme_options(event)
 
     def _reload_gutter_theme_options(self, event=None):
-
         style = ttk.Style()
         background = style.lookup("GUTTER", "background")
         if background:

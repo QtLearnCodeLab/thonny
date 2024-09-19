@@ -1,10 +1,10 @@
 import sys
 import threading
+from logging import DEBUG, getLogger
 from queue import Queue
 
-from thonny.common import ConnectionFailedException
-from thonny.plugins.micropython.connection import MicroPythonConnection
-from logging import getLogger, DEBUG
+from ...common import execute_with_frontend_sys_path
+from .connection import MicroPythonConnection
 
 logger = getLogger(__name__)
 
@@ -18,18 +18,10 @@ class WebReplConnection(MicroPythonConnection):
     """
 
     def __init__(self, url, password, num_bytes_received=0):
-
         self.num_bytes_received = num_bytes_received
         super().__init__()
 
-        try:
-            import websockets  # @UnusedImport
-        except:
-            print(
-                "Can't import `websockets`. You can install it via 'Tools => Manage plug-ins'.",
-                file=sys.stderr,
-            )
-            sys.exit(-1)
+        execute_with_frontend_sys_path(self._try_load_websockets)
         self._url = url
         self._password = password
         self._write_responses = Queue()
@@ -45,6 +37,17 @@ class WebReplConnection(MicroPythonConnection):
         res = self._connection_result.get()
         if res != "OK":
             raise res
+
+    def _try_load_websockets(self):
+        try:
+            import websockets
+        except ImportError:
+            logger.error("Could not import websockets")
+            print(
+                "Can't import `websockets`. You can install it via 'Tools => Manage plug-ins'.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
 
     def _wrap_ws_main(self):
         import asyncio
@@ -77,7 +80,7 @@ class WebReplConnection(MicroPythonConnection):
                 self._ws = await websockets.connect(self._url, ping_interval=None)
         except OSError as e:
             # print("\nCould not connect:", e, file=sys.stderr)
-            raise ConnectionFailedException(str(e))
+            raise ConnectionRefusedError(str(e))
         logger.debug("GOT WS: %r", self._ws)
 
         # read password prompt and send password
@@ -115,10 +118,10 @@ class WebReplConnection(MicroPythonConnection):
         while True:
             while not self._write_queue.empty():
                 data = self._write_queue.get(block=False)
-                if isinstance(data, WebreplBinaryMsg):
-                    payload = data.data
-                else:
+                if self.text_mode:
                     payload = data.decode("UTF-8")
+                else:
+                    payload = data
                 await self._ws.send(payload)
                 # logger.debug("Wrote %r bytes", len(data))
                 self._write_responses.put(len(data))
@@ -126,7 +129,7 @@ class WebReplConnection(MicroPythonConnection):
             # Allow reading loop to progress
             await asyncio.sleep(0.01)
 
-    def write(self, data):
+    def write(self, data: bytes) -> int:
         self._write_queue.put_nowait(data)
         return self._write_responses.get()
 
@@ -143,14 +146,3 @@ class WebReplConnection(MicroPythonConnection):
         import asyncio
         asyncio.get_event_loop().run_until_complete(self.async_close())
         """
-
-
-class WebreplBinaryMsg:
-    """This wrapper helps distinguishing between bytes which should
-    be decoded and sent as text frame and bytes sent as binary frame"""
-
-    def __init__(self, data):
-        self.data = data
-
-    def __len__(self):
-        return len(self.data)

@@ -1,5 +1,5 @@
-from logging import getLogger
 import tkinter as tk
+from logging import getLogger
 from tkinter import ttk
 
 from thonny import get_workbench
@@ -82,9 +82,16 @@ class EditorConfigurationPage(ConfigurationPage):
             exportselection=False,
             textvariable=self._line_length_var,
             state="readonly",
-            values=[0, 60, 70, 80, 90, 100, 110, 120],
+            values=[0, 60, 70, 80, 88, 90, 100, 110, 120],
         )
         self._line_length_combo.grid(row=20, column=1, sticky=tk.W, padx=10)
+
+        self.add_checkbox(
+            f"file.make_saved_shebang_scripts_executable",
+            tr("Make saved shebang scripts executable"),
+            row=25,
+            pady=(ems_to_pixels(2), 0),
+        )
 
         self.columnconfigure(1, weight=1)
 
